@@ -35,8 +35,8 @@ func main() {
 
 	// Write asset summaries and tax reports to spreadsheet
 	r := NewReport("Portfolio Report")
-	tr.WriteTo(r)
-	summaries.WriteTo(r)
+	err = writeReport(&tr, r)
+	err = writeReport(&summaries, r)
 	err = r.Save()
 	if err != nil {
 		log.Fatalln(err)

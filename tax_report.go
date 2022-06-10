@@ -5,6 +5,10 @@ import (
 	"sort"
 )
 
+type Reporter interface {
+	WriteTo(RowWriter) error
+}
+
 type RowWriter interface {
 	WriteRows(string, [][]interface{}) error
 }
