@@ -8,12 +8,14 @@ import (
 
 type AssetYear struct {
 	Pl, Taxable, Fees, Dividends, WithholdingTax float64
+	Year                                         int
 }
 
 type Asset struct {
 	Instrument
-	Holdings []Trade
-	Summary  map[int]*AssetYear
+	FirstPurchase time.Time
+	Holdings      []Trade
+	Years         []AssetYear
 }
 
 type AssetSummary map[int]*AssetYear
@@ -21,17 +23,36 @@ type AssetSummary map[int]*AssetYear
 func (s AssetSummary) year(y int) *AssetYear {
 	_, ok := s[y]
 	if !ok {
-		s[y] = new(AssetYear)
+		s[y] = &AssetYear{Year: y}
 	}
 	return s[y]
+}
+
+type SummaryReport []Asset
+
+func (s *SummaryReport) Title() string {
+	return "Summary"
+}
+
+func (s *SummaryReport) HeaderRow() []interface{} {
+	return []interface{}{
+		"Symbols",
+		"Category",
+		"Year",
+		"Profit/Loss",
+		"Taxable PL",
+		"Fees",
+		"Dividends",
+		"Withholding Tax",
+	}
 }
 
 type Rater interface {
 	Rate(string, int) float64
 }
 
-func summarizeAssets(imports []AssetImport, r Rater) []Asset {
-	assets := make([]Asset, len(imports))
+func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
+	assets := make(SummaryReport, len(imports))
 
 	for i, ai := range imports {
 		sort.Slice(ai.Trades, func(i, j int) bool {
@@ -54,7 +75,7 @@ func summarizeAssets(imports []AssetImport, r Rater) []Asset {
 				proceeds := s.Price * c.Quantity * r.Rate(s.Currency, s.Time.Year())
 				cost := c.Price * c.Quantity * r.Rate(c.Currency, s.Time.Year())
 				y.Pl += proceeds - cost
-				if s.Time.After(TaxableDeadline(c.Time)) {
+				if s.Time.After(taxableDeadline(c.Time)) {
 					continue
 				}
 				y.Taxable += proceeds - cost
@@ -78,12 +99,27 @@ func summarizeAssets(imports []AssetImport, r Rater) []Asset {
 			sum.year(t.Year).WithholdingTax += amt
 		}
 
-		assets[i] = Asset{
-			Instrument: ai.Instrument,
-			Holdings:   holdings,
-			Summary:    sum,
+		a := Asset{
+			Instrument:    ai.Instrument,
+			FirstPurchase: ai.Trades[0].Time,
+			Holdings:      holdings,
+			Years:         make([]AssetYear, 0, len(sum)),
 		}
+
+		for _, data := range sum {
+			a.Years = append(a.Years, *data)
+		}
+
+		sort.Slice(a.Years, func(i, j int) bool {
+			return a.Years[i].Year < a.Years[j].Year
+		})
+
+		assets[i] = a
 	}
+
+	sort.Slice(assets, func(i, j int) bool {
+		return assets[i].FirstPurchase.Before(assets[j].FirstPurchase)
+	})
 
 	return assets
 }
@@ -156,23 +192,6 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 	return sales, fees, fifo.data
 }
 
-func TaxableDeadline(since time.Time) time.Time {
+func taxableDeadline(since time.Time) time.Time {
 	return since.AddDate(2, 0, 0)
-}
-
-func filterFromTo(l []int, min, max int) []int {
-	cap := max - min + 1
-	if len(l) < cap {
-		cap = len(l)
-	}
-	filtered := make([]int, 0, cap)
-	for _, i := range l {
-		if i < min || i > max {
-			continue
-		}
-
-		filtered = append(filtered, i)
-	}
-
-	return filtered
 }

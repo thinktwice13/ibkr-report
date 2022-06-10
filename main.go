@@ -18,10 +18,16 @@ func main() {
 
 	summaries := summarizeAssets(assets, rates)
 	print(len(summaries))
-	PrettyPrint(summaries)
+	// PrettyPrint(summaries)
 	convFees := convertFees(fees, rates)
-	tr := buildTaxReport(summaries, convFees, len(years))
+	tr := taxReport(summaries, convFees, len(years))
+	fmt.Println(len(tr))
+
 	PrettyPrint(tr)
+
+	r := NewReport("Portfolio Report")
+	tr.WriteTo(r)
+	r.Save()
 }
 
 type YearAmount struct {
