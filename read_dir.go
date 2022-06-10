@@ -15,11 +15,14 @@ import (
 	"time"
 )
 
-func readDir() {
+func readDir() ([]AssetImport, []Transaction, []int, []string) {
 	files := findFiles()
+	ir := NewImportResults()
 	for _, file := range files {
-		readFile(file)
+		ReadStatement(file, ir)
 	}
+
+	return ir.assets.list(), ir.fees, list(ir.years), list(ir.currencies)
 }
 
 func findFiles() []string {
@@ -46,7 +49,7 @@ func findFiles() []string {
 	return files
 }
 
-func readFile(filename string) {
+func ReadStatement(filename string, ir *ImportResults) {
 	file, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("cannot open file %s", filename)
@@ -84,11 +87,11 @@ func readFile(filename string) {
 			continue
 		}
 
-		handle(lm)
+		handle(lm, ir)
 	}
 }
 
-type lineHandler func(map[string]string)
+type lineHandler func(map[string]string, *ImportResults)
 
 func handleLine(m map[string]string) {
 	fmt.Println(m)
@@ -123,13 +126,13 @@ func mapLine(data, header []string) (map[string]string, error) {
 	return lm, nil
 }
 
-func handleInstrumentLine(lm map[string]string) {
+func handleInstrumentLine(lm map[string]string, ir *ImportResults) {
 	symbols := append(strings.Split(strings.ReplaceAll(lm["Symbol"], " ", ""), ","), formatISIN(lm["Security ID"]))
 	if len(symbols) == 0 {
 		return
 	}
 
-	fmt.Println(symbols, lm["Asset Category"])
+	ir.AddInstrumentInfo(symbols, lm["Asset Category"])
 }
 
 // Adds "US" prefix to US security ISIN codes and removes the 12th check digit
@@ -152,15 +155,15 @@ func formatISIN(sID string) string {
 	return sID
 }
 
-func handleTradeLine(lm map[string]string) {
+func handleTradeLine(lm map[string]string, ir *ImportResults) {
 	if lm["Date/Time"] == "" || lm["Asset Category"] == "Forex" || lm["Symbol"] == "" {
 		return
 	}
 	t := timeFromExact(lm["Date/Time"])
 	c := lm["Currency"]
-	fmt.Println(lm["Symbol"], c, t, amountFromString(lm["Quantity"]), amountFromString(lm["T. Price"]), amountFromString(lm["Comm/Fee"]))
+	ir.AddTrade(lm["Symbol"], c, t, amountFromString(lm["Quantity"]), amountFromString(lm["T. Price"]), amountFromString(lm["Comm/Fee"]))
 }
-func handleDividendLine(lm map[string]string) {
+func handleDividendLine(lm map[string]string, ir *ImportResults) {
 	if lm["Date"] == "" {
 		return
 	}
@@ -168,7 +171,7 @@ func handleDividendLine(lm map[string]string) {
 	if err != nil {
 		return
 	}
-	fmt.Println(symbol, lm["Currency"], yearFromDate(lm["Date"]), amountFromString(lm["Amount"]), false)
+	ir.AddDividend(symbol, lm["Currency"], yearFromDate(lm["Date"]), amountFromString(lm["Amount"]), false)
 }
 
 func yearFromDate(s string) int {
@@ -179,7 +182,7 @@ func yearFromDate(s string) int {
 	return y
 }
 
-func handleWithholdingTaxLine(lm map[string]string) {
+func handleWithholdingTaxLine(lm map[string]string, ir *ImportResults) {
 	if lm["Date"] == "" {
 		return
 	}
@@ -189,14 +192,14 @@ func handleWithholdingTaxLine(lm map[string]string) {
 		return
 	}
 
-	fmt.Println(symbol, lm["Currency"], yearFromDate(lm["Date"]), amountFromString(lm["Amount"]), true)
+	ir.AddDividend(symbol, lm["Currency"], yearFromDate(lm["Date"]), amountFromString(lm["Amount"]), true)
 }
-func handleFeeLine(lm map[string]string) {
+func handleFeeLine(lm map[string]string, ir *ImportResults) {
 	if lm["Date"] == "" {
 		return
 	}
 
-	fmt.Println(lm["Currency"], amountFromString(lm["Amount"]), yearFromDate(lm["Date"]))
+	ir.AddFee(lm["Currency"], amountFromString(lm["Amount"]), yearFromDate(lm["Date"]))
 }
 
 func symbolFromDescription(d string) (string, error) {
@@ -237,4 +240,16 @@ func timeFromExact(t string) time.Time {
 	}
 
 	return tm
+}
+
+type Key interface {
+	string | float64 | int
+}
+
+func list[T Key](m map[T]bool) []T {
+	var l []T
+	for k := range m {
+		l = append(l, k)
+	}
+	return l
 }
