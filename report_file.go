@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"github.com/xuri/excelize/v2"
+	"math"
 	"strconv"
 )
 
+// Report extends excelize.File type with custom WriteTo method to implement RowWriter interface needed by the reports to be written
 type Report struct {
 	f        *excelize.File
 	filename string
@@ -36,4 +38,10 @@ func (r *Report) Save() error {
 
 func NewReport(filename string) *Report {
 	return &Report{f: excelize.NewFile(), filename: filename + ".xlsx"}
+}
+
+// RoundDec rounds a float number to provided number of decimal places
+func RoundDec(v float64, places int) float64 {
+	f := math.Pow(10, float64(places))
+	return math.Round(v*f) / f
 }

@@ -9,37 +9,87 @@ type RowWriter interface {
 	WriteRows(string, [][]interface{}) error
 }
 
+// CapitalGains represents a year of capital gains to be reported for taxes
 type CapitalGains struct {
 	Pl, Fees, Dividends float64
 }
 
+// FgnIncome represents year of taxed foreign income to be reported
 type FgnIncome struct {
 	Received, TaxPaid float64
 	Src               string
 }
 
-type taxYr struct {
+// taxYear is a temporary type used to summarize income from multiple assets
+type taxYear struct {
 	CapitalGains
 	taxedForeignIncome map[string]*FgnIncome
 }
 
 type TaxReport []TaxYear
+
+// TaxYear is similar to taxYear, but
 type TaxYear struct {
 	CapitalGains
 	TaxedForeignIncome []FgnIncome
 	Year               int
 }
 
-type taxByYear map[int]*taxYr
+type taxByYear map[int]*taxYear
 
-func (r taxByYear) year(y int) *taxYr {
-	_, ok := r[y]
-	if !ok {
-		r[y] = &taxYr{
-			taxedForeignIncome: map[string]*FgnIncome{},
+// taxReport builds a yearly tax report provided a list of summarized assets and portfolio fees
+// Returns a slice of tax years to be reported
+func taxReport(assets []Asset, fees []YearAmount, yrs int) TaxReport {
+	r := make(taxByYear, yrs)
+
+	// Add portfolio fees first to use as a deductible when adding profits
+	for _, f := range fees {
+		r.year(f.Year).Fees += f.Amount
+	}
+
+	for _, a := range assets {
+		for _, sum := range a.Years {
+			y := r.year(sum.Year)
+
+			// Profits
+			y.Pl += sum.Taxable
+			y.Fees += sum.Fees
+
+			// Dividends
+			// Do not report dividend income for non-equity assets
+			// If asset has tax withheld in a given year, report all of the dividends and tax paid as foreign taxed income. Froup by country of origin
+			// Otherwise, report received dividends as capital gains
+			if a.Category != "Stocks" {
+				continue
+			}
+			if sum.WithholdingTax == 0 {
+				y.Dividends += sum.Dividends
+				continue
+			}
+			src := y.incomeSource(a.Domicile())
+			src.Received += sum.Dividends
+			src.TaxPaid += sum.WithholdingTax
 		}
 	}
-	return r[y]
+
+	// Adjust profits: Deduct fees paid in a year from positive yearly profits
+	// Report zero profit for years ending in negative profits
+	// Delete entire year from report if profit is zero and no dividends received
+	for k, y := range r {
+		if y.Pl <= 0 {
+			y.Pl = 0
+		} else {
+			deductible := math.Min(y.Pl, math.Abs(y.Fees))
+			y.Pl -= deductible
+			y.Fees += deductible
+		}
+
+		if y.Pl+y.Dividends == 0 {
+			delete(r, k)
+		}
+	}
+
+	return r.toList()
 }
 
 func (r taxByYear) toList() TaxReport {
@@ -72,51 +122,22 @@ func (r taxByYear) toList() TaxReport {
 	return list
 }
 
-func (y *taxYr) incomeSource(src string) *FgnIncome {
+func (r taxByYear) year(y int) *taxYear {
+	_, ok := r[y]
+	if !ok {
+		r[y] = &taxYear{
+			taxedForeignIncome: map[string]*FgnIncome{},
+		}
+	}
+	return r[y]
+}
+
+func (y *taxYear) incomeSource(src string) *FgnIncome {
 	_, ok := y.taxedForeignIncome[src]
 	if !ok {
 		y.taxedForeignIncome[src] = new(FgnIncome)
 	}
 	return y.taxedForeignIncome[src]
-}
-
-func taxReport(assets []Asset, fees []YearAmount, yrs int) TaxReport {
-	r := make(taxByYear, yrs)
-
-	// Add portfolio fees first to use as a deductible when adding profits
-	for _, f := range fees {
-		r.year(f.Year).Fees += f.Amount
-	}
-
-	for _, a := range assets {
-		for _, sum := range a.Years {
-			y := r.year(sum.Year)
-
-			// Profits
-			y.Pl += sum.Taxable
-			y.Fees += sum.Fees
-
-			if y.Pl > 0 {
-				deductible := math.Min(y.Pl, math.Abs(y.Fees))
-				y.Pl -= deductible
-				y.Fees += deductible
-			}
-
-			// Dividends
-			if a.Category != "Stocks" {
-				continue
-			}
-			if sum.WithholdingTax == 0 {
-				y.Dividends += sum.Dividends
-				continue
-			}
-			src := y.incomeSource(a.Domicile())
-			src.Received += sum.Dividends
-			src.TaxPaid += sum.WithholdingTax
-		}
-	}
-
-	return r.toList()
 }
 
 func (r *TaxReport) WriteTo(rw RowWriter) error {
@@ -138,9 +159,9 @@ func (r *TaxReport) WriteTo(rw RowWriter) error {
 	for _, y := range *r {
 		jrows = append(jrows, []interface{}{
 			y.Year,
-			y.Dividends,
-			y.Pl,
-			y.Fees,
+			RoundDec(y.Dividends, 2),
+			RoundDec(y.Pl, 2),
+			RoundDec(y.Fees, 2),
 		})
 
 		if y.TaxedForeignIncome == nil {
@@ -151,8 +172,8 @@ func (r *TaxReport) WriteTo(rw RowWriter) error {
 			irows = append(irows, []interface{}{
 				y.Year,
 				fi.Src,
-				fi.Received,
-				fi.TaxPaid,
+				RoundDec(fi.Received, 2),
+				RoundDec(fi.TaxPaid, 2),
 			})
 		}
 	}

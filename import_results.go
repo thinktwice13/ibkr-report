@@ -21,6 +21,27 @@ type Instrument struct {
 	Category string
 }
 
+type AssetImport struct {
+	Instrument
+	Trades                    []Trade
+	Dividends, WithholdingTax []Transaction
+}
+
+type ImportResults struct {
+	assets assets
+
+	// List of transactions not related to any specific asset
+	// i.e. broker subsctiptions
+	fees []Transaction
+
+	// Mapped unique currencies and years found in any imported events
+	currencies map[string]bool
+	years      map[int]bool
+}
+
+// Domicile extracts the instrument country code used fo the ForeignIncome tax report
+// Requires ISIN to be one of the symbols to work properly
+// Fallback if the first symbol foundn in the symbols array
 func (i *Instrument) Domicile() string {
 	var isin string
 	for _, symbol := range i.Symbols {
@@ -38,19 +59,9 @@ func (i *Instrument) Domicile() string {
 	return isin[:2]
 }
 
-type AssetImport struct {
-	Instrument
-	Trades                    []Trade
-	Dividends, WithholdingTax []Transaction
-}
-
-type ImportResults struct {
-	assets     assets
-	fees       []Transaction
-	currencies map[string]bool
-	years      map[int]bool
-}
-
+// NewImportResults initializes new import results struct
+// Sets default surrencies
+// Sets default year to current year
 func NewImportResults() *ImportResults {
 	return &ImportResults{
 		assets: map[string]*AssetImport{},
@@ -113,6 +124,11 @@ func (r *ImportResults) AddFee(ccy string, amt float64, yr int) {
 
 }
 
+// bySymbols func looks up any assets already imported by incoming symbols
+// If none found, creates new asset and maps to ll its symbols
+// If at least one symbol is matched with existing assets, merges information and all the symbols
+//
+// If incoming symbols are matched with more than one distinct asset, merges conflict and uses the first found match
 func (as assets) bySymbols(ss ...string) *AssetImport {
 	if len(ss) == 0 {
 		return nil
@@ -165,6 +181,7 @@ func (as assets) bySymbols(ss ...string) *AssetImport {
 	return base
 }
 
+// mergeAsset merges information on the assets and jions all founc events: trades, dividends and withholding tax tax
 func mergeAsset(src AssetImport, tgt *AssetImport) {
 	found := make(map[string]bool, len(src.Symbols))
 	for _, symbol := range tgt.Symbols {
@@ -190,6 +207,7 @@ func mergeAsset(src AssetImport, tgt *AssetImport) {
 	tgt.Dividends = append(tgt.Dividends, src.Dividends...)
 }
 
+// assets maps imported asset information by symbol, for easier lookup while importing
 type assets map[string]*AssetImport
 
 func (a assets) list() []AssetImport {
@@ -205,4 +223,22 @@ func (a assets) list() []AssetImport {
 	}
 
 	return list
+}
+
+type YearAmount struct {
+	Amount float64
+	Year   int
+}
+
+func convertFees(fees []Transaction, r Rater) []YearAmount {
+	converted := make([]YearAmount, len(fees))
+	for i := range fees {
+		f := &fees[i]
+		converted[i] = YearAmount{
+			Amount: f.Amount * r.Rate(f.Currency, f.Year),
+			Year:   f.Year,
+		}
+	}
+	return converted
+
 }

@@ -6,11 +6,16 @@ import (
 	"time"
 )
 
+// AssetYear represents a summary of profits, fees, dividends and withholding tax paid for a sifnle asset in a signle year
 type AssetYear struct {
 	Pl, Taxable, Fees, Dividends, WithholdingTax float64
 	Year                                         int
 }
 
+// Asset holds:
+// - info on the instrument representing an asset held,
+// - currently active holdinggs (FIFO accounting strategy)
+// - yearly summary of profts, dividends, fees and withholding tax paid
 type Asset struct {
 	Instrument
 	FirstPurchase time.Time
@@ -20,6 +25,7 @@ type Asset struct {
 
 type AssetSummary map[int]*AssetYear
 
+// year returns a requested mapped item. Creates new if does not exist
 func (s AssetSummary) year(y int) *AssetYear {
 	_, ok := s[y]
 	if !ok {
@@ -30,23 +36,23 @@ func (s AssetSummary) year(y int) *AssetYear {
 
 type SummaryReport []Asset
 
-func (s *SummaryReport) Title() string {
-	return "Summary"
-}
-
 type Rater interface {
 	Rate(string, int) float64
 }
 
+// summarizeAssets returns a list of summarized asset imports, given a list of imports and a type implementing a Rater if
 func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 	assets := make(SummaryReport, len(imports))
 
 	for i, ai := range imports {
+		// Sort imported trades by date
+		// Must be sorted for costbasis accounting strategy
 		sort.Slice(ai.Trades, func(i, j int) bool {
 			return ai.Trades[i].Time.Before(ai.Trades[j].Time)
 		})
 
 		// sales, fees, active holdings
+		// Calculate summary size for the asset
 		sales, fees, holdings := tradeAsset(ai.Trades)
 		fromYear := ai.Trades[0].Time.Year()
 		toYear := time.Now().Year()
@@ -55,7 +61,6 @@ func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 		}
 		sum := make(AssetSummary, toYear-fromYear+1)
 
-		// profits
 		for _, s := range sales {
 			y := sum.year(s.Time.Year())
 			for _, c := range s.Basis {
@@ -69,7 +74,7 @@ func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 			}
 		}
 
-		// fees
+		// fees returned from profits accounting
 		for _, f := range fees {
 			amt := f.Amount * r.Rate(f.Currency, f.Year)
 			sum.year(f.Year).Fees += amt
@@ -97,17 +102,10 @@ func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 			a.Years = append(a.Years, *data)
 		}
 
-		sort.Slice(a.Years, func(i, j int) bool {
-			return a.Years[i].Year < a.Years[j].Year
-		})
-
-		assets[i] = a
+		assets[i] = a // TODO Insertion sort?
 	}
 
-	sort.Slice(assets, func(i, j int) bool {
-		return assets[i].FirstPurchase.Before(assets[j].FirstPurchase)
-	})
-
+	sortAssets(assets)
 	return assets
 }
 
@@ -128,6 +126,8 @@ type Sale struct {
 	Basis    []Cost
 }
 
+// tradeAsset calculates sales, fees and active holdings according to costbasis strategy (FIFO)
+// TODO use other strategies
 func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 	fifo := new(fifo)
 	fees := make([]Transaction, 0, len(ts))
@@ -140,9 +140,10 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 			Year:     t.Time.Year(),
 		})
 
+		// Add to costbasis strategy if a purchase
 		if t.Quantity > 0 {
 			// Purchase
-			fifo.data = append(fifo.data, ts[i])
+			fifo.data = append(fifo.data, ts[i]) // TODO strategy specific
 			continue
 		}
 
@@ -154,12 +155,16 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 		}
 		// Calculate costs
 		for {
+			// If trade order fulfilled, break out
 			if t.Quantity == 0 {
 				sales = append(sales, s)
 				break
 			}
 
-			purchase := &fifo.data[0]
+			// Find next purchase to calculate ciostbasis from
+			// Deduct sold quantity from purchase used to calculate the cost basis and sale trade being processed
+			// Add costs to curreny sale
+			purchase := &fifo.data[0] // TODO strategyu specific
 			cost := Cost{
 				Time:     purchase.Time,
 				Currency: purchase.Currency,
@@ -169,6 +174,8 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 			purchase.Quantity -= cost.Quantity
 			t.Quantity += cost.Quantity
 			s.Basis = append(s.Basis, cost)
+
+			// Evict entire purchase if completely sold
 			if purchase.Quantity == 0 {
 				// TODO Handle error when this is the last purchase, but there are more trade (import error)
 				fifo.data = fifo.data[1:]
@@ -179,10 +186,12 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 	return sales, fees, fifo.data
 }
 
+// taxableDeadline determines rge threshold date for profits tax
 func taxableDeadline(since time.Time) time.Time {
 	return since.AddDate(2, 0, 0)
 }
 
+// WriteTo writes report data to RowWriter implementing type
 func (s *SummaryReport) WriteTo(rw RowWriter) error {
 	srows := make([][]interface{}, 0, len(*s))
 	hrows := make([][]interface{}, 0, len(*s))
@@ -214,11 +223,11 @@ func (s *SummaryReport) WriteTo(rw RowWriter) error {
 				a.Symbols,
 				a.Category,
 				y.Year,
-				y.Pl,
-				y.Taxable,
-				y.Fees,
-				y.Dividends,
-				y.WithholdingTax,
+				RoundDec(y.Pl, 2),
+				RoundDec(y.Taxable, 2),
+				RoundDec(y.Fees, 2),
+				RoundDec(y.Dividends, 2),
+				RoundDec(y.WithholdingTax, 2),
 			})
 		}
 
@@ -229,7 +238,7 @@ func (s *SummaryReport) WriteTo(rw RowWriter) error {
 				h.Purchased,
 				h.TaxableUntil,
 				h.Quantity,
-				h.Cost,
+				RoundDec(h.Cost, 2),
 			})
 		}
 	}
@@ -257,6 +266,8 @@ type Lot struct {
 func lotsFromTrades(ts []Trade, r Rater) []Lot {
 	lots := make([]Lot, len(ts))
 	for i, t := range ts {
+		// Calculate taxable threshhold date
+		// Nil if already passed
 		td := taxableDeadline(t.Time)
 		tu := &td
 		if tu.Before(time.Now()) {
@@ -269,6 +280,19 @@ func lotsFromTrades(ts []Trade, r Rater) []Lot {
 			Quantity:     t.Quantity,
 		}
 	}
-
+	// TODO When other costbasis strategus used, trades slice might come in ordered by something other than purchase date. Sort here
 	return lots
+}
+
+// sortAssets sorts summarized assets and their yearly summaries in chronological order
+func sortAssets(as []Asset) {
+	for _, a := range as {
+		sort.Slice(a.Years, func(i, j int) bool {
+			return a.Years[i].Year < a.Years[j].Year
+		})
+	}
+
+	sort.Slice(as, func(i, j int) bool {
+		return as[i].FirstPurchase.Before(as[j].FirstPurchase)
+	})
 }
