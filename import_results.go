@@ -21,6 +21,23 @@ type Instrument struct {
 	Category string
 }
 
+func (i *Instrument) Domicile() string {
+	var isin string
+	for _, symbol := range i.Symbols {
+		if len(symbol) != 11 {
+			continue
+		}
+		isin = symbol
+		break
+	}
+
+	if isin == "" {
+		return i.Symbols[0]
+	}
+
+	return isin[:2]
+}
+
 type AssetImport struct {
 	Instrument
 	Trades                    []Trade
@@ -186,5 +203,6 @@ func (a assets) list() []AssetImport {
 		list = append(list, *a)
 		listed[a] = true
 	}
+
 	return list
 }
