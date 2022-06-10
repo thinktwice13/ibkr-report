@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"ibkr-report/fx"
 	"log"
 	"os"
 	"time"
@@ -19,7 +18,7 @@ func main() {
 	}
 
 	// Fetch currency conversion rates per year
-	rates, err := fx.New(currencies, years)
+	rates, err := NewFxRates(currencies, years)
 	if err != nil {
 		log.Fatalln(err)
 	}
