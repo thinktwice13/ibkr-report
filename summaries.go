@@ -14,7 +14,7 @@ type AssetYear struct {
 type Asset struct {
 	Instrument
 	FirstPurchase time.Time
-	Holdings      []Trade
+	Holdings      []Lot
 	Years         []AssetYear
 }
 
@@ -89,7 +89,7 @@ func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 		a := Asset{
 			Instrument:    ai.Instrument,
 			FirstPurchase: ai.Trades[0].Time,
-			Holdings:      holdings,
+			Holdings:      lotsFromTrades(holdings, r),
 			Years:         make([]AssetYear, 0, len(sum)),
 		}
 
@@ -185,6 +185,9 @@ func taxableDeadline(since time.Time) time.Time {
 
 func (s *SummaryReport) WriteTo(rw RowWriter) error {
 	srows := make([][]interface{}, 0, len(*s))
+	hrows := make([][]interface{}, 0, len(*s))
+	// FIXME rows len = summaries len * years len / holdings len
+
 	srows = append(srows, []interface{}{
 		"Asset",
 		"Category",
@@ -194,6 +197,15 @@ func (s *SummaryReport) WriteTo(rw RowWriter) error {
 		"Fees",
 		"Dividends",
 		"Withholding Tax",
+	})
+
+	hrows = append(hrows, []interface{}{
+		"Asset",
+		"Category",
+		"Purchased",
+		"TaxableUntil",
+		"Quantity",
+		"Cost",
 	})
 
 	for _, a := range *s {
@@ -209,11 +221,54 @@ func (s *SummaryReport) WriteTo(rw RowWriter) error {
 				y.WithholdingTax,
 			})
 		}
+
+		for _, h := range a.Holdings {
+			hrows = append(hrows, []interface{}{
+				a.Symbols,
+				a.Category,
+				h.Purchased,
+				h.TaxableUntil,
+				h.Quantity,
+				h.Cost,
+			})
+		}
 	}
 
 	err := rw.WriteRows("Summary", srows)
 	if err != nil {
 		return err
 	}
+
+	err = rw.WriteRows("Holdings", hrows)
+	if err != nil {
+		return err
+	}
+
 	return nil
+}
+
+type Lot struct {
+	Purchased    time.Time
+	TaxableUntil *time.Time
+	Cost         float64
+	Quantity     float64
+}
+
+func lotsFromTrades(ts []Trade, r Rater) []Lot {
+	lots := make([]Lot, len(ts))
+	for i, t := range ts {
+		td := taxableDeadline(t.Time)
+		tu := &td
+		if tu.Before(time.Now()) {
+			tu = nil
+		}
+		lots[i] = Lot{
+			Purchased:    t.Time,
+			TaxableUntil: tu,
+			Cost:         t.Quantity * t.Price * r.Rate(t.Currency, t.Time.Year()),
+			Quantity:     t.Quantity,
+		}
+	}
+
+	return lots
 }
