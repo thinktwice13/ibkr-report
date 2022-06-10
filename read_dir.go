@@ -29,25 +29,16 @@ func readDir() ([]AssetImport, []Transaction, []int, []string) {
 // findFiles walks the current directory and looks for .csv files
 func findFiles() []string {
 	var files []string
-	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			fmt.Printf("prevent panic by handling failure accessing a path %q: %v\n", path, err)
-			return err
+	filepath.WalkDir(os.Getenv("PWD"), func(path string, d fs.DirEntry, err error) error {
+		if d.IsDir() && d.Name()[:1] == "." {
+			return filepath.SkipDir
 		}
-
-		ext := filepath.Ext(d.Name())
-		if ext == ".csv" {
-			files = append(files, d.Name())
+		if filepath.Ext(d.Name()) == ".csv" {
+			files = append(files, path)
 		}
-
 		return nil
 	})
-
-	if err != nil {
-		fmt.Printf("error walking the path %q: %v\n", ".", err)
-		return nil
-	}
-
+	fmt.Printf("%d files found. Working... \n", len(files))
 	return files
 }
 
@@ -56,7 +47,7 @@ func findFiles() []string {
 func ReadStatement(filename string, ir *ImportResults) {
 	file, err := os.Open(filename)
 	if err != nil {
-		fmt.Printf("cannot open file %s", filename)
+		fmt.Printf("cannot open file %s %v", filename, err)
 	}
 	defer file.Close()
 
@@ -100,10 +91,6 @@ func ReadStatement(filename string, ir *ImportResults) {
 }
 
 type lineHandler func(map[string]string, *ImportResults)
-
-func handleLine(m map[string]string) {
-	fmt.Println(m)
-}
 
 // ibkrSections returns map of IBKR csv line handlers mapped by relevant section
 func ibkrSections() map[string]lineHandler {

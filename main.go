@@ -3,23 +3,22 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"ibkr-report/fx"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 )
 
 func main() {
 	t := time.Now()
+	CheckPWD()
 	assets, fees, years, currencies := readDir()
-
 	if len(assets) == 0 {
 		fmt.Println("No data found. Exiting")
 		os.Exit(0)
 	}
-
 	// Fetch currency conversion rates per year
-	rates, err := fx.New(currencies, years)
+	rates, err := NewFxRates(currencies, years)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -41,7 +40,22 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fmt.Println("Finished in:", time.Since(t))
+	fmt.Println("Finished in", time.Since(t))
+	os.Exit(0)
+}
+
+func CheckPWD() {
+	if os.Getenv("GOPATH") == "" {
+		dirErr := "could not read directory"
+		exec, err := os.Executable()
+		if err != nil {
+			log.Fatalln(dirErr)
+		}
+		err = os.Setenv("PWD", filepath.Dir(exec))
+		if err != nil {
+			log.Fatalln(dirErr)
+		}
+	}
 }
 
 func PrettyPrint(a any) {

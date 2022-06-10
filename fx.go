@@ -1,4 +1,4 @@
-package fx
+package main
 
 import (
 	"encoding/json"
@@ -9,8 +9,37 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+type Rates map[int]map[string]float64
+
+func (r Rates) Rate(ccy string, yr int) float64 {
+	return r[yr][ccy] // TODO Check errors
+}
+
+func NewFxRates(currencies []string, years []int) (Rates, error) {
+	r := make(Rates, len(years))
+	var m sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(len(years))
+	for _, y := range years {
+		go func(r Rates, y int, m *sync.Mutex, wg *sync.WaitGroup) {
+			defer wg.Done()
+			rates, err := grabHRKRates(y, currencies, 3)
+			if err != nil {
+				fmt.Printf("failed getting exchange rates for year %d", y)
+				return
+			}
+			m.Lock()
+			defer m.Unlock()
+			r[y] = rates
+		}(r, y, &m, &wg)
+	}
+	wg.Wait()
+	return r, nil
+}
 
 // TODO Other currencies https://ec.europa.eu/info/funding-tenders/procedures-guidelines-tenders/information-contractors-and-beneficiaries/exchange-rate-inforeuro_en
 type rateResponse struct {
@@ -59,7 +88,6 @@ func grabHRKRates(year int, c []string, retries int) (map[string]float64, error)
 	err3 := json.Unmarshal(contents, &resp.Rates)
 	if err3 != nil {
 		fmt.Println("whoops:", err3)
-		// outputs: whoops: <nil>
 	}
 
 	rm := make(map[string]float64, len(c))

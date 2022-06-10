@@ -79,17 +79,13 @@ func taxReport(assets []Asset, fees []YearAmount, yrs int) TaxReport {
 	// Adjust profits: Deduct fees paid in a year from positive yearly profits
 	// Report zero profit for years ending in negative profits
 	// Delete entire year from report if profit is zero and no dividends received
-	for k, y := range r {
+	for _, y := range r {
 		if y.Pl <= 0 {
 			y.Pl = 0
 		} else {
 			deductible := math.Min(y.Pl, math.Abs(y.Fees))
 			y.Pl -= deductible
 			y.Fees += deductible
-		}
-
-		if y.Pl+y.Dividends == 0 {
-			delete(r, k)
 		}
 	}
 
