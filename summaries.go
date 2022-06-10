@@ -34,19 +34,6 @@ func (s *SummaryReport) Title() string {
 	return "Summary"
 }
 
-func (s *SummaryReport) HeaderRow() []interface{} {
-	return []interface{}{
-		"Symbols",
-		"Category",
-		"Year",
-		"Profit/Loss",
-		"Taxable PL",
-		"Fees",
-		"Dividends",
-		"Withholding Tax",
-	}
-}
-
 type Rater interface {
 	Rate(string, int) float64
 }
@@ -194,4 +181,39 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 
 func taxableDeadline(since time.Time) time.Time {
 	return since.AddDate(2, 0, 0)
+}
+
+func (s *SummaryReport) WriteTo(rw RowWriter) error {
+	srows := make([][]interface{}, 0, len(*s))
+	srows = append(srows, []interface{}{
+		"Asset",
+		"Category",
+		"Year",
+		"Profit/Loss",
+		"Taxable PL",
+		"Fees",
+		"Dividends",
+		"Withholding Tax",
+	})
+
+	for _, a := range *s {
+		for _, y := range a.Years {
+			srows = append(srows, []interface{}{
+				a.Symbols,
+				a.Category,
+				y.Year,
+				y.Pl,
+				y.Taxable,
+				y.Fees,
+				y.Dividends,
+				y.WithholdingTax,
+			})
+		}
+	}
+
+	err := rw.WriteRows("Summary", srows)
+	if err != nil {
+		return err
+	}
+	return nil
 }

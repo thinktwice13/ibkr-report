@@ -26,6 +26,7 @@ func (r *Report) WriteRows(sheet string, rows [][]interface{}) error {
 }
 
 func (r *Report) Save() error {
+	r.f.DeleteSheet("Sheet1")
 	err := r.f.SaveAs(r.filename)
 	if err != nil {
 		return err

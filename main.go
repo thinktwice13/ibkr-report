@@ -26,6 +26,7 @@ func main() {
 	PrettyPrint(tr)
 
 	r := NewReport("Portfolio Report")
+	summaries.WriteTo(r)
 	tr.WriteTo(r)
 	r.Save()
 }
