@@ -12,34 +12,45 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // readDir imports all data found in curent directory
 func readDir() ([]AssetImport, []Transaction, []int, []string) {
-	files := findFiles()
 	ir := NewImportResults()
-	for _, file := range files {
-		ReadStatement(file, ir)
+	var wg sync.WaitGroup
+	files := make(chan string, 10)
+	for w := 1; w <= maxWorkers; w++ {
+		wg.Add(1)
+		go func(wg *sync.WaitGroup, files <-chan string, r *ImportResults) {
+			for f := range files {
+				ReadStatement(f, ir)
+				// fmt.Println(f)
+			}
+			wg.Done()
+		}(&wg, files, ir)
 	}
-
+	findFiles(files)
+	wg.Wait()
 	return ir.assets.list(), ir.fees, list(ir.years), list(ir.currencies)
 }
 
 // findFiles walks the current directory and looks for .csv files
-func findFiles() []string {
-	var files []string
+func findFiles(files chan<- string) {
+	count := 0
 	filepath.WalkDir(os.Getenv("PWD"), func(path string, d fs.DirEntry, err error) error {
 		if d.IsDir() && d.Name()[:1] == "." {
 			return filepath.SkipDir
 		}
 		if filepath.Ext(d.Name()) == ".csv" {
-			files = append(files, path)
+			count++
+			files <- path
 		}
 		return nil
 	})
-	fmt.Printf("%d files found. Working... \n", len(files))
-	return files
+	close(files)
+	fmt.Printf("%d files found. Working... \n", count)
 }
 
 // ReadStatement reads single csv IBKR file
