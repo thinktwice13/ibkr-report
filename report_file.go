@@ -64,25 +64,24 @@ func RoundDec(v float64, places int) float64 {
 	return math.Round(v*f) / f
 }
 
-func writeReport(r Reporter, rw RowWriter) error {
+func writeReport(r Reporter, rw RowWriter) {
 	err := r.WriteTo(rw)
 	if err != nil {
-		return err
+		log.Fatalln(err)
 	}
-	return nil
 }
 
 // genColumns generates a slice of strings representing spreadsheet column letters up to a provided size
 func genColumns(n int) []string {
 	a := 65
 	z := 90
-	length := z - a + 1
-	if n < length {
-		length = n
+	maxLen := z - a + 1
+	if n < maxLen {
+		maxLen = n
 	}
-	AZ := make([]string, 0, length)
-	for c := 65; c < a+length; c++ {
-		AZ = append(AZ, fmt.Sprintf("%s", string(c)))
+	AZ := make([]string, 0, maxLen)
+	for c := a; c < a+maxLen; c++ {
+		AZ = append(AZ, fmt.Sprintf("%s", string(rune(c))))
 	}
 
 	if n <= z-a+1 {

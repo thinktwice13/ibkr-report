@@ -89,13 +89,16 @@ func (r *ImportResults) AddInstrumentInfo(symbols []string, cat string) {
 	}
 	a.Category = cat
 }
-func (r *ImportResults) AddTrade(sym, ccy string, tm time.Time, qty, price, fee float64) {
+func (r *ImportResults) AddTrade(sym, ccy string, tm *time.Time, qty, price, fee float64) {
+	if sym == "" || ccy == "" || tm == nil || qty*price == 0 {
+		return
+	}
 	r.l.Lock()
 	defer r.l.Unlock()
 	a := r.assets.bySymbols(sym)
 	t := Trade{}
 	t.Currency = ccy
-	t.Time = tm
+	t.Time = *tm
 	t.Quantity = qty
 	t.Price = price
 	t.Fee = fee
@@ -106,6 +109,9 @@ func (r *ImportResults) AddTrade(sym, ccy string, tm time.Time, qty, price, fee 
 
 }
 func (r *ImportResults) AddDividend(sym, ccy string, yr int, amt float64, isTax bool) {
+	if sym == "" || ccy == "" || yr == 0 || amt == 0 {
+		return
+	}
 	r.l.Lock()
 	defer r.l.Unlock()
 	a := r.assets.bySymbols(sym)
@@ -123,6 +129,9 @@ func (r *ImportResults) AddDividend(sym, ccy string, yr int, amt float64, isTax 
 	r.years[yr] = true
 }
 func (r *ImportResults) AddFee(ccy string, amt float64, yr int) {
+	if yr == 0 || amt == 0 || ccy == "" {
+		return
+	}
 	r.l.Lock()
 	defer r.l.Unlock()
 	f := Transaction{}

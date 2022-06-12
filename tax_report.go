@@ -63,9 +63,12 @@ func taxReport(assets []Asset, fees []YearAmount, yrs int) TaxReport {
 			// Do not report dividend income for non-equity assets
 			// If asset has tax withheld in a given year, report all of the dividends and tax paid as foreign taxed income. Froup by country of origin
 			// Otherwise, report received dividends as capital gains
-			if a.Category != "Stocks" {
+			// TODO search info when category empty
+			// Only Equity dividends are taxable. Assume Equity for empty category
+			if !(a.Category == "Stocks" || a.Category == "") {
 				continue
 			}
+
 			if sum.WithholdingTax == 0 {
 				y.Dividends += sum.Dividends
 				continue

@@ -18,7 +18,7 @@ type AssetYear struct {
 // - yearly summary of profts, dividends, fees and withholding tax paid
 type Asset struct {
 	Instrument
-	FirstPurchase time.Time
+	FirstPurchase *time.Time
 	Holdings      []Lot
 	Years         []AssetYear
 }
@@ -54,12 +54,16 @@ func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 		// sales, fees, active holdings
 		// Calculate summary size for the asset
 		sales, fees, holdings := tradeAsset(ai.Trades)
-		fromYear := ai.Trades[0].Time.Year()
+
 		toYear := time.Now().Year()
-		if len(holdings) == 0 {
-			toYear = ai.Trades[len(ai.Trades)-1].Time.Year()
+		firstYear := toYear
+		if len(ai.Trades) != 0 {
+			firstYear = ai.Trades[0].Time.Year()
+			if len(holdings) == 0 {
+				toYear = ai.Trades[len(ai.Trades)-1].Time.Year()
+			}
 		}
-		sum := make(AssetSummary, toYear-fromYear+1)
+		sum := make(AssetSummary, toYear-firstYear+1)
 
 		for _, s := range sales {
 			y := sum.year(s.Time.Year())
@@ -92,10 +96,13 @@ func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 		}
 
 		a := Asset{
-			Instrument:    ai.Instrument,
-			FirstPurchase: ai.Trades[0].Time,
-			Holdings:      lotsFromTrades(holdings, r),
-			Years:         make([]AssetYear, 0, len(sum)),
+			Instrument: ai.Instrument,
+			Holdings:   lotsFromTrades(holdings, r),
+			Years:      make([]AssetYear, 0, len(sum)),
+		}
+
+		if len(ai.Trades) != 0 {
+			a.FirstPurchase = &ai.Trades[0].Time
 		}
 
 		for _, data := range sum {
@@ -293,6 +300,12 @@ func sortAssets(as []Asset) {
 	}
 
 	sort.Slice(as, func(i, j int) bool {
-		return as[i].FirstPurchase.Before(as[j].FirstPurchase)
+		if as[i].FirstPurchase == nil {
+			return true
+		}
+		if as[j].FirstPurchase == nil {
+			return false
+		}
+		return as[i].FirstPurchase.Before(*as[j].FirstPurchase)
 	})
 }
