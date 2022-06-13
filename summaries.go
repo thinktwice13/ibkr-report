@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -171,6 +172,10 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 			// Find next purchase to calculate ciostbasis from
 			// Deduct sold quantity from purchase used to calculate the cost basis and sale trade being processed
 			// Add costs to curreny sale
+			if len(fifo.data) == 0 {
+				fmt.Errorf("error calculating trades for asset")
+				return nil, nil, nil
+			}
 			purchase := &fifo.data[0] // TODO strategyu specific
 			cost := Cost{
 				Time:     purchase.Time,
@@ -194,7 +199,12 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 }
 
 // taxableDeadline determines rge threshold date for profits tax
+// Tax introduced 1/1/2016. For any deadlines before, return provided date
+// For any taxable events provided after 1/1/2016, calculate deadline at 24 months after provided time
 func taxableDeadline(since time.Time) time.Time {
+	if since.Before(time.Date(2016, 1, 1, 1, 0, 0, 0, time.UTC)) {
+		return since
+	}
 	return since.AddDate(2, 0, 0)
 }
 
