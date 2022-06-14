@@ -91,17 +91,20 @@ func grabHRKRates(year int, c []string, retries int) (map[string]float64, error)
 	}
 
 	var resp ratesResponse
-	response, err := http.Get(url)
-	if err != nil && retries <= 0 {
-		fmt.Println(err)
-		// TODO If all retries failed, check Internet conn. Update message
-		return nil, errors.New("cannot fetch rates")
+	var err error
+	var response *http.Response
+	for r := 0; r < retries; r++ {
+		response, err = http.Get(url)
+		if err != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+
+		break
 	}
 
-	if err != nil {
-		time.Sleep(time.Second)
-		retries--
-		return grabHRKRates(year, c, retries)
+	if response == nil {
+		return nil, errors.New("cannot fetch rates")
 	}
 
 	defer response.Body.Close()
@@ -110,9 +113,9 @@ func grabHRKRates(year int, c []string, retries int) (map[string]float64, error)
 		log.Fatalf("%s", err)
 	}
 
-	err3 := json.Unmarshal(contents, &resp.Rates)
-	if err3 != nil {
-		fmt.Println("whoops:", err3)
+	err = json.Unmarshal(contents, &resp.Rates)
+	if err != nil {
+		fmt.Println("whoops:", err)
 	}
 
 	rm := make(map[string]float64, len(c))
