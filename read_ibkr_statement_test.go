@@ -18,6 +18,7 @@ func Test_amountFromString(t *testing.T) {
 		{"decimal comma", "22,33", 22.33},
 		{"decimal comma with 000 separator", "1.222,33", 1222.33},
 		{"with spaces", "1. 222 ,333 .44", 1222333.44},
+		{"neg with spaces", "-1. 222 ,333 .44", -1222333.44},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
