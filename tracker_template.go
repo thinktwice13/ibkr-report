@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"github.com/xuri/excelize/v2"
 	"os"
@@ -9,14 +8,14 @@ import (
 	"time"
 )
 
-func createXlsTemplate() error {
+func createXlsTemplate() {
 	filename := "Portfolio Tracker.xlsx"
 	fpath := filepath.Join(os.Getenv("PWD"), filename)
 	var err error
 
 	_, err = os.Stat(fpath)
 	if err == nil {
-		return errors.New("tracker already exists")
+		return
 	}
 
 	f := excelize.NewFile()
@@ -95,7 +94,6 @@ func createXlsTemplate() error {
 	f.DeleteSheet("Sheet1")
 	err = f.SaveAs(fpath)
 	if err != nil {
-		return err
+		fmt.Println("error creating tracker template")
 	}
-	return nil
 }

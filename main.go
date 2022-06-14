@@ -43,7 +43,7 @@ func main() {
 	writeReport(&tr, r)
 	writeReport(&summaries, r)
 	err = r.Save()
-	err = createXlsTemplate()
+	createXlsTemplate()
 	if err != nil {
 		log.Fatalln(err)
 	}

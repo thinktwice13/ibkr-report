@@ -66,6 +66,7 @@ func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 		}
 		sum := make(AssetSummary, toYear-firstYear+1)
 
+		// summarize sales
 		for _, s := range sales {
 			y := sum.year(s.Time.Year())
 			for _, c := range s.Basis {

@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -80,6 +80,10 @@ func mapIbkrLine(data, header []string) (map[string]string, error) {
 		return nil, errors.New("cannot convert to row from empty header")
 	}
 
+	if data == nil {
+		return nil, errors.New("no data to map")
+	}
+
 	if len(header) != len(data) {
 		return nil, errors.New("header and line length mismatch")
 	}
@@ -106,15 +110,13 @@ func handleInstrumentLine(lm map[string]string, ir *ImportResults) {
 
 // Adds "US" prefix to US security ISIN codes and removes the 12th check digit
 func formatISIN(sID string) string {
-	if sID == "" {
-		log.Fatal("empty security ID")
+	if sID == "" || len(sID) < 9 || len(sID) > 12 {
+		return sID // Not ISIN
 	}
-
-	if len(sID) > 8 && len(sID) < 11 {
+	if len(sID) < 11 {
 		// US ISIN number. Add country code
 		sID = "US" + sID
 	}
-
 	if len(sID) == 12 {
 		// Remove ISIN check digit
 		return sID[:11]
@@ -128,9 +130,12 @@ func handleTradeLine(lm map[string]string, ir *ImportResults) {
 	if lm["Date/Time"] == "" || lm["Asset Category"] == "Forex" || lm["Symbol"] == "" {
 		return
 	}
-	t := timeFromExact(lm["Date/Time"])
+	t, err := timeFromExact(lm["Date/Time"])
+	if err != nil {
+		return
+	}
 	c := lm["Currency"]
-	ir.AddTrade(lm["Symbol"], c, &t, amountFromString(lm["Quantity"]), amountFromString(lm["T. Price"]), amountFromString(lm["Comm/Fee"]))
+	ir.AddTrade(lm["Symbol"], c, t, amountFromString(lm["Quantity"]), amountFromString(lm["T. Price"]), amountFromString(lm["Comm/Fee"]))
 }
 
 // handleDividendLine handles the dividend lines of the IBKR csv statement
@@ -179,9 +184,10 @@ func handleFeeLine(lm map[string]string, ir *ImportResults) {
 }
 
 // symbolFromDescription extracts a symbol from IBKR csv dividend lines
+// TODO Check for ISINs
 func symbolFromDescription(d string) (string, error) {
 	if d == "" {
-		return "", errors.New("cannot create asset event without symbol")
+		return "", errors.New("empty input")
 	}
 
 	// This is a dividend or withholding tax
@@ -192,33 +198,56 @@ func symbolFromDescription(d string) (string, error) {
 
 	symbol := strings.ReplaceAll(d[:parensIdx], " ", "")
 	if symbol == "" {
-		return "", errors.New("cannor find symbol in description")
+		return "", errors.New("cannot find symbol in description")
 	}
 	return symbol, nil
 }
 
 // amountFromString formats number strings to float64 type
 func amountFromString(s string) float64 {
-	var v float64
 	if s == "" {
 		return 0
 
 	}
-	s = strings.ReplaceAll(s, ",", "")
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		log.Printf("error parsing float from from %v", err)
+	// Remove all but numbers, commas and points
+	re := regexp.MustCompile(`[0-9.,]`)
+	ss := strings.Join(re.FindAllString(s, -1), "")
+
+	// Find all commans and points
+	// If none found, return 0, print error
+	signs := regexp.MustCompile(`[.,]`).FindAllString(ss, -1)
+	if len(signs) == 0 {
+		f, err := strconv.ParseFloat(ss, 64)
+		if err != nil {
+			fmt.Errorf("could not convert %s to number", s)
+			return 0
+		}
+
+		return f
 	}
-	return v
+
+	// Use last sign as decimal separator and ignore others
+	// Find idx and replace whatever sign was to a decimal point
+	sign := signs[len(signs)-1]
+	signIdx := strings.LastIndex(ss, sign)
+	sign = "."
+	left := regexp.MustCompile(`[0-9]`).FindAllString(ss[:signIdx], -1)
+	right := ss[signIdx+1:]
+	n, err := strconv.ParseFloat(strings.Join(append(left, []string{sign, right}...), ""), 64)
+	if err != nil {
+		fmt.Errorf("could not convert %s to number", s)
+		return 0
+	}
+	return n
 }
 
 // timeFromExact extracts time.Time from IBKR csv time field
-func timeFromExact(t string) time.Time {
+func timeFromExact(t string) (*time.Time, error) {
 	timeStr := strings.Join(strings.Split(t, ","), "")
 	tm, err := time.Parse("2006-01-02 15:04:05", timeStr)
 	if err != nil {
-		panic(err)
+		return nil, errors.New("could not parse time")
 	}
 
-	return tm
+	return &tm, nil
 }
