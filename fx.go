@@ -13,46 +13,55 @@ import (
 	"time"
 )
 
-type Rates map[int]map[string]float64
-
-func (r Rates) Rate(ccy string, yr int) float64 {
-	return r[yr][ccy] // TODO Check errors
+type Rates struct {
+	l     *sync.Mutex
+	rates map[int]map[string]float64
 }
 
-func NewFxRates(currencies []string, years []int) (Rates, error) {
-	t := time.Now()
-	r := make(Rates, len(years))
+func (r *Rates) Rate(ccy string, yr int) float64 {
+	return r.rates[yr][ccy] // Should not be any errors here. Throw if not fetched correctly
+}
 
-	var m sync.Mutex
+func (r *Rates) setRates(y int, rates map[string]float64) {
+	r.l.Lock()
+	defer r.l.Unlock()
+	r.rates[y] = rates
+}
+
+// NewFxRates creates a new Rates struct by fetching currency exhange rates for provided years and currencies
+// TODO Do not fetch in New
+func NewFxRates(currencies []string, years []int) (*Rates, error) {
+	r := &Rates{
+		l:     new(sync.Mutex),
+		rates: map[int]map[string]float64{},
+	}
 	var wg sync.WaitGroup
-	wg.Add(len(years))
-	for _, y := range years {
-		go func(r Rates, y int, m *sync.Mutex, wg *sync.WaitGroup) {
+	workers := maxWorkers
+	if len(years) < maxWorkers {
+		workers = len(years)
+	}
+	wg.Add(workers)
+	yrs := make(chan int)
+	for w := 0; w < workers; w++ {
+		go func(r *Rates, yrs <-chan int, wg *sync.WaitGroup) {
 			defer wg.Done()
-			rates, err := grabHRKRates(y, currencies, 3)
-			if err != nil {
-				fmt.Println(err)
-				fmt.Printf("cannot get rates for year %d", y)
-				return
+			for y := range yrs {
+				rates, err := grabHRKRates(y, currencies, 3)
+				if err != nil {
+					log.Fatalln("failed getting currency exchange rates from hnb.hr. Please try again later")
+				}
+				r.setRates(y, rates)
 			}
-			m.Lock()
-			defer m.Unlock()
-			r[y] = rates
-		}(r, y, &m, &wg)
+		}(r, yrs, &wg)
 	}
+
+	for _, y := range years {
+		yrs <- y
+	}
+
+	close(yrs)
 	wg.Wait()
-
-	fmt.Println("Rates fetched in:", time.Since(t))
 	return r, nil
-}
-
-func (r Rates) Print() {
-	fmt.Println("Fx")
-	for y := range r {
-		for c := range r[y] {
-			fmt.Printf("%d %s %g\n", y, c, r[y][c])
-		}
-	}
 }
 
 // TODO Other currencies https://ec.europa.eu/info/funding-tenders/procedures-guidelines-tenders/information-contractors-and-beneficiaries/exchange-rate-inforeuro_en
@@ -65,16 +74,18 @@ type ratesResponse struct {
 	Rates []rateResponse `json:"rates"`
 }
 
+// grabHRKRates fetches HRK exchange rates for a list of currencies in a provided year from hnb.hr
 func grabHRKRates(year int, c []string, retries int) (map[string]float64, error) {
 	if year <= 1900 {
 		log.Fatal("Cannot get currency rates for a year before 1901")
 	}
 
 	// TODO Other currencies than HRK
-	date := LastDateForYear(year)
+	date := lastDateForYear(year)
 
 	// url := fmt.Sprintf("https://api.hnb.hr/tecajn/v1?datum-od=%s&datum-do=%s", from.Format("2006-01-02"), to.Format("2006-01-02"))
-	url := fmt.Sprintf("https://api.hnb.hr/tecajn/v1?datum=%s", date.Format("2006-01-02"))
+	baseUrl := "https://api.hnb.hr/tecajn/v1"
+	url := fmt.Sprintf(baseUrl+"?datum=%s", date.Format("2006-01-02"))
 	for _, curr := range c {
 		url = url + "&valuta=" + curr
 	}
@@ -102,7 +113,6 @@ func grabHRKRates(year int, c []string, retries int) (map[string]float64, error)
 	err3 := json.Unmarshal(contents, &resp.Rates)
 	if err3 != nil {
 		fmt.Println("whoops:", err3)
-		// outputs: whoops: <nil>
 	}
 
 	rm := make(map[string]float64, len(c))
@@ -113,7 +123,10 @@ func grabHRKRates(year int, c []string, retries int) (map[string]float64, error)
 	return rm, nil
 }
 
-func LastDateForYear(y int) (d time.Time) {
+// lastDateForYear calculates last day of the year for the input
+// If year is current year, returns today
+// Return time set to UTC
+func lastDateForYear(y int) (d time.Time) {
 	if y == time.Now().Year() {
 		d = time.Now().UTC()
 	} else {
@@ -123,11 +136,11 @@ func LastDateForYear(y int) (d time.Time) {
 	return
 }
 
+// formatApiRate formats the api response currency rate received from hnb.hr
 func formatApiRate(r string) float64 {
 	s := strings.ReplaceAll(strings.ReplaceAll(r, ".", ""), ",", ".")
-
 	if s == "" {
-		log.Fatalf("Cannot create amount from %s", s)
+		log.Fatalf("cannot create amount from %s", s)
 	}
 	s = strings.ReplaceAll(s, ",", "")
 	v, err := strconv.ParseFloat(s, 64)

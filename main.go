@@ -5,13 +5,19 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"runtime"
 	"time"
 )
 
+var maxWorkers int
+
 func main() {
 	t := time.Now()
-	assets, fees, years, currencies := readDir()
+	maxWorkers = runtime.NumCPU()
+	SetPWD()
 
+	assets, fees, years, currencies := readDir()
 	if len(assets) == 0 {
 		fmt.Println("No data found. Exiting")
 		os.Exit(0)
@@ -34,13 +40,28 @@ func main() {
 
 	// Write asset summaries and tax reports to spreadsheet
 	r := NewReport("Portfolio Report")
-	err = writeReport(&tr, r)
-	err = writeReport(&summaries, r)
+	writeReport(&tr, r)
+	writeReport(&summaries, r)
 	err = r.Save()
+	createXlsTemplate()
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fmt.Println("Finished in:", time.Since(t))
+	fmt.Println("Finished in", time.Since(t))
+}
+
+func SetPWD() {
+	if os.Getenv("GOPATH") == "" {
+		dirErr := "could not read directory"
+		exec, err := os.Executable()
+		if err != nil {
+			log.Fatalln(dirErr)
+		}
+		err = os.Setenv("PWD", filepath.Dir(exec))
+		if err != nil {
+			log.Fatalln(dirErr)
+		}
+	}
 }
 
 func PrettyPrint(a any) {

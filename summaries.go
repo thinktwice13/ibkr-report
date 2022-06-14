@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -18,7 +19,7 @@ type AssetYear struct {
 // - yearly summary of profts, dividends, fees and withholding tax paid
 type Asset struct {
 	Instrument
-	FirstPurchase time.Time
+	FirstPurchase *time.Time
 	Holdings      []Lot
 	Years         []AssetYear
 }
@@ -54,13 +55,18 @@ func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 		// sales, fees, active holdings
 		// Calculate summary size for the asset
 		sales, fees, holdings := tradeAsset(ai.Trades)
-		fromYear := ai.Trades[0].Time.Year()
-		toYear := time.Now().Year()
-		if len(holdings) == 0 {
-			toYear = ai.Trades[len(ai.Trades)-1].Time.Year()
-		}
-		sum := make(AssetSummary, toYear-fromYear+1)
 
+		toYear := time.Now().Year()
+		firstYear := toYear
+		if len(ai.Trades) != 0 {
+			firstYear = ai.Trades[0].Time.Year()
+			if len(holdings) == 0 {
+				toYear = ai.Trades[len(ai.Trades)-1].Time.Year()
+			}
+		}
+		sum := make(AssetSummary, toYear-firstYear+1)
+
+		// summarize sales
 		for _, s := range sales {
 			y := sum.year(s.Time.Year())
 			for _, c := range s.Basis {
@@ -92,10 +98,13 @@ func summarizeAssets(imports []AssetImport, r Rater) SummaryReport {
 		}
 
 		a := Asset{
-			Instrument:    ai.Instrument,
-			FirstPurchase: ai.Trades[0].Time,
-			Holdings:      lotsFromTrades(holdings, r),
-			Years:         make([]AssetYear, 0, len(sum)),
+			Instrument: ai.Instrument,
+			Holdings:   lotsFromTrades(holdings, r),
+			Years:      make([]AssetYear, 0, len(sum)),
+		}
+
+		if len(ai.Trades) != 0 {
+			a.FirstPurchase = &ai.Trades[0].Time
 		}
 
 		for _, data := range sum {
@@ -164,6 +173,10 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 			// Find next purchase to calculate ciostbasis from
 			// Deduct sold quantity from purchase used to calculate the cost basis and sale trade being processed
 			// Add costs to curreny sale
+			if len(fifo.data) == 0 {
+				fmt.Errorf("error calculating trades for asset")
+				return nil, nil, nil
+			}
 			purchase := &fifo.data[0] // TODO strategyu specific
 			cost := Cost{
 				Time:     purchase.Time,
@@ -187,7 +200,12 @@ func tradeAsset(ts []Trade) ([]Sale, []Transaction, []Trade) {
 }
 
 // taxableDeadline determines rge threshold date for profits tax
+// Tax introduced 1/1/2016. For any deadlines before, return provided date
+// For any taxable events provided after 1/1/2016, calculate deadline at 24 months after provided time
 func taxableDeadline(since time.Time) time.Time {
+	if since.Before(time.Date(2016, 1, 1, 1, 0, 0, 0, time.UTC)) {
+		return since
+	}
 	return since.AddDate(2, 0, 0)
 }
 
@@ -293,6 +311,12 @@ func sortAssets(as []Asset) {
 	}
 
 	sort.Slice(as, func(i, j int) bool {
-		return as[i].FirstPurchase.Before(as[j].FirstPurchase)
+		if as[i].FirstPurchase == nil {
+			return true
+		}
+		if as[j].FirstPurchase == nil {
+			return false
+		}
+		return as[i].FirstPurchase.Before(*as[j].FirstPurchase)
 	})
 }

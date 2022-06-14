@@ -3,7 +3,10 @@ package main
 import (
 	"fmt"
 	"github.com/xuri/excelize/v2"
+	"log"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 )
 
@@ -20,7 +23,6 @@ func (r *Report) WriteRows(sheet string, rows [][]interface{}) error {
 		row := &rows[i]
 		err := r.f.SetSheetRow(sheet, "A"+strconv.Itoa(i+1), row)
 		if err != nil {
-			fmt.Println(err)
 			return err
 		}
 	}
@@ -44,15 +46,16 @@ func (r *Report) WriteRows(sheet string, rows [][]interface{}) error {
 
 func (r *Report) Save() error {
 	r.f.DeleteSheet("Sheet1")
-	err := r.f.SaveAs(r.filename)
+	err := r.f.SaveAs(filepath.Join(os.Getenv("PWD"), r.filename+".xlsx"))
 	if err != nil {
-		return err
+		log.Fatalln(err)
 	}
+	fmt.Println(r.filename+".xlsx", "created")
 	return nil
 }
 
 func NewReport(filename string) *Report {
-	return &Report{f: excelize.NewFile(), filename: filename + ".xlsx"}
+	return &Report{f: excelize.NewFile(), filename: filename}
 }
 
 // RoundDec rounds a float number to provided number of decimal places
@@ -61,25 +64,24 @@ func RoundDec(v float64, places int) float64 {
 	return math.Round(v*f) / f
 }
 
-func writeReport(r Reporter, rw RowWriter) error {
+func writeReport(r Reporter, rw RowWriter) {
 	err := r.WriteTo(rw)
 	if err != nil {
-		return err
+		log.Fatalln(err)
 	}
-	return nil
 }
 
 // genColumns generates a slice of strings representing spreadsheet column letters up to a provided size
 func genColumns(n int) []string {
 	a := 65
 	z := 90
-	length := z - a + 1
-	if n < length {
-		length = n
+	maxLen := z - a + 1
+	if n < maxLen {
+		maxLen = n
 	}
-	AZ := make([]string, 0, length)
-	for c := 65; c < a+length; c++ {
-		AZ = append(AZ, fmt.Sprintf("%s", string(c)))
+	AZ := make([]string, 0, maxLen)
+	for c := a; c < a+maxLen; c++ {
+		AZ = append(AZ, fmt.Sprintf("%s", string(rune(c))))
 	}
 
 	if n <= z-a+1 {
