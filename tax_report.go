@@ -65,7 +65,7 @@ func taxReport(assets []Asset, fees []YearAmount, yrs int) TaxReport {
 			// Otherwise, report received dividends as capital gains
 			// TODO search info when category empty
 			// Only Equity dividends are taxable. Assume Equity for empty category
-			if !(a.Category == "Stocks" || a.Category == "") {
+			if !(a.Category == "Equity" || a.Category == "") {
 				continue
 			}
 

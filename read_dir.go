@@ -36,19 +36,23 @@ func readDir() ([]AssetImport, []Transaction, []int, []string) {
 func findFiles(csvs chan<- string) {
 	m := make(map[string]bool)
 	filepath.WalkDir(os.Getenv("PWD"), func(path string, d fs.DirEntry, err error) error {
+		// Skip hidden directories
 		if d.IsDir() && d.Name()[:1] == "." {
 			return filepath.SkipDir
 		}
-		ext := filepath.Ext(d.Name())
-		if ok := m[path]; ok {
+
+		// Skip exact filenames already read
+		if ok := m[d.Name()]; ok {
 			return nil
 		}
 
 		// Only consider csv and xls* files, but skip exported spreadsheet
+		ext := filepath.Ext(d.Name())
 		if ext == ".csv" || strings.HasPrefix(ext, ".xls") {
 			if d.Name() == "Portfolio Report.xlsx" {
 				return nil
 			}
+			m[d.Name()] = true
 			csvs <- path
 		}
 		return nil

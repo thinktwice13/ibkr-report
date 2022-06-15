@@ -105,7 +105,7 @@ func handleInstrumentLine(lm map[string]string, ir *ImportResults) {
 		return
 	}
 
-	ir.AddInstrumentInfo(symbols, lm["Asset Category"])
+	ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
 }
 
 // Adds "US" prefix to US security ISIN codes and removes the 12th check digit
@@ -253,4 +253,17 @@ func timeFromExact(t string) (*time.Time, error) {
 	}
 
 	return &tm, nil
+}
+
+func importCategory(c string) string {
+	if c == "" {
+		return ""
+	}
+
+	lc := strings.ToLower(c)
+	if strings.HasPrefix(lc, "stock") || strings.HasPrefix(lc, "equit") {
+		return "Equity"
+	}
+
+	return c
 }

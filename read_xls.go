@@ -50,7 +50,7 @@ func handleXlsDividends(lines []map[string]string, ir *ImportResults) {
 		yr := yearFromDate(lm["Year"])
 		symbols := symbolsFromCell(lm["Asset"])
 		if len(symbols) > 1 {
-			ir.AddInstrumentInfo(symbols, "")
+			ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
 		}
 		ir.AddDividend(symbols[0], lm["Currency"], yr, amountFromString(lm["Amount"]), false)
 	}
@@ -65,7 +65,7 @@ func handleXlsTrades(lines []map[string]string, ir *ImportResults) {
 
 		symbols := symbolsFromCell(lm["Asset"])
 		if len(symbols) > 1 {
-			ir.AddInstrumentInfo(symbols, "")
+			ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
 		}
 		timeField := lm["Time"]
 		if timeField == "" {
@@ -92,7 +92,7 @@ func handleXlsWithholdingTax(lines []map[string]string, ir *ImportResults) {
 		yr := yearFromDate(lm["Year"])
 		symbols := symbolsFromCell(lm["Asset"])
 		if len(symbols) > 1 {
-			ir.AddInstrumentInfo(symbols, "")
+			ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
 		}
 		ir.AddDividend(symbols[0], lm["Currency"], yr, amountFromString(lm["Amount"]), true)
 	}

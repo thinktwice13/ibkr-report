@@ -46,7 +46,7 @@ func NewFxRates(currencies []string, years []int) (*Rates, error) {
 		go func(r *Rates, yrs <-chan int, wg *sync.WaitGroup) {
 			defer wg.Done()
 			for y := range yrs {
-				rates, err := grabHRKRates(y, currencies, 3)
+				rates, err := grabRates(y, currencies, 3)
 				if err != nil {
 					log.Fatalln("failed getting currency exchange rates from hnb.hr. Please try again later")
 				}
@@ -74,8 +74,11 @@ type ratesResponse struct {
 	Rates []rateResponse `json:"rates"`
 }
 
-// grabHRKRates fetches HRK exchange rates for a list of currencies in a provided year from hnb.hr
-func grabHRKRates(year int, c []string, retries int) (map[string]float64, error) {
+// Fetch HRK fx rates
+// NOTE: Change this section to change source and currency for the reports
+
+// grabRates fetches HRK exchange rates for a list of currencies in a provided year from hnb.hr
+func grabRates(year int, c []string, retries int) (map[string]float64, error) {
 	if year <= 1900 {
 		log.Fatal("Cannot get currency rates for a year before 1901")
 	}
