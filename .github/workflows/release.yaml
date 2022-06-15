@@ -5,8 +5,6 @@ on:
         # run only against tags
         tags:
             - 'v*'
-        branches:
-            - "main"
 
 permissions:
     contents: write
