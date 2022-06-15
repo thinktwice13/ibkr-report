@@ -1,6 +1,5 @@
-# ibkr-report
+# [WIP] ibkr-report [![goreleaser](https://github.com/thinktwice13/ibkr-report/actions/workflows/release.yaml/badge.svg)](https://github.com/thinktwice13/ibkr-report/actions/workflows/release.yaml)
 > A simple Interactive Brokers .csv statements parser intended to help beginner Croatian investors with tax reporting 
-# [WIP]
 ## How to use
 #### Running the app
 Download the latest release for your operating system. Move and run the executable file from the root of your directories containing IBKR .csv statements. It will also read subdirectories. After finishing, find the `Portfolio Report.xlsx` spreadsheet in the same directory.
@@ -16,7 +15,7 @@ All currencies are in `HRK` (taken from [hnb.hr](https://www.hnb.hr/temeljne-fun
 
 **INO-DOH** sheet matches the same tax report; shows taxed income by source country. Asset countries are determined by reading the provided `ISIN` numbers. If no `ISIN` found, an asset symbol will be used. [See Todos](#todo)
 
-**JOPPD** sheet combines two yearly joppd reports - realized profits (FIFO method) and dividends. It also considers fees and charges not related to any of the assets (i.e. broker subscription). JOPPD report deducts fees from any positive realized profits, but not from the dividend income for the year.
+**JOPPD** sheet combines two yearly `JOPPD` reports - realized profits (FIFO method) and dividends. It also considers fees and charges not related to any of the assets (i.e. broker subscription). `JOPPD` report deducts fees from any positive realized profits, but not from the dividend income for the year.
 
 **Summary** sheet shows a breakdown of asset dividends, tax withheld, fees and profits (FIFO method)
 
