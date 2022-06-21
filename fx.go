@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -19,7 +18,11 @@ type Rates struct {
 }
 
 func (r *Rates) Rate(ccy string, yr int) float64 {
-	return r.rates[yr][ccy] // Should not be any errors here. Throw if not fetched correctly
+	rate, ok := r.rates[yr][ccy]
+	if !ok {
+		log.Fatalf("no fx rates found for %s in %d", ccy, yr)
+	}
+	return rate
 }
 
 func (r *Rates) setRates(y int, rates map[string]float64) {
@@ -36,17 +39,20 @@ func NewFxRates(currencies []string, years []int) (*Rates, error) {
 		rates: map[int]map[string]float64{},
 	}
 	var wg sync.WaitGroup
+
+	// By default, use global max workers. Reduce if number of years to fetch rates for is lower
 	workers := maxWorkers
 	if len(years) < maxWorkers {
 		workers = len(years)
 	}
+
 	wg.Add(workers)
 	yrs := make(chan int)
 	for w := 0; w < workers; w++ {
 		go func(r *Rates, yrs <-chan int, wg *sync.WaitGroup) {
 			defer wg.Done()
 			for y := range yrs {
-				rates, err := grabRates(y, currencies, 3)
+				rates, err := grabFxRates(y, currencies, 3)
 				if err != nil {
 					log.Fatalln("failed getting currency exchange rates from hnb.hr. Please try again later")
 				}
@@ -77,18 +83,16 @@ type ratesResponse struct {
 // Fetch HRK fx rates
 // NOTE: Change this section to change source and currency for the reports
 
-// grabRates fetches HRK exchange rates for a list of currencies in a provided year from hnb.hr
-func grabRates(year int, c []string, retries int) (map[string]float64, error) {
+// grabFxRates fetches HRK exchange rates for a list of currencies in a provided year from hnb.hr
+func grabFxRates(year int, c []string, retries int) (map[string]float64, error) {
 	if year <= 1900 {
-		log.Fatal("Cannot get currency rates for a year before 1901")
+		// Nothing like this should be imported from files
+		panic("Cannot get currency rates for a year before 1901")
 	}
-
-	// TODO Other currencies than HRK
-	date := lastDateForYear(year)
 
 	// url := fmt.Sprintf("https://api.hnb.hr/tecajn/v1?datum-od=%s&datum-do=%s", from.Format("2006-01-02"), to.Format("2006-01-02"))
 	baseUrl := "https://api.hnb.hr/tecajn/v1"
-	url := fmt.Sprintf(baseUrl+"?datum=%s", date.Format("2006-01-02"))
+	url := fmt.Sprintf(baseUrl+"?datum=%s", fxDateFromYear(year))
 	for _, curr := range c {
 		url = url + "&valuta=" + curr
 	}
@@ -123,35 +127,18 @@ func grabRates(year int, c []string, retries int) (map[string]float64, error) {
 
 	rm := make(map[string]float64, len(c))
 	for _, r := range resp.Rates {
-		rm[r.Currency] = formatApiRate(r.Rate)
+		rm[r.Currency] = amountFromString(r.Rate)
 	}
 
 	return rm, nil
 }
 
-// lastDateForYear calculates last day of the year for the input
+// fxDateFromYear calculates last day of the year for the input
 // If year is current year, returns today
 // Return time set to UTC
-func lastDateForYear(y int) (d time.Time) {
-	if y == time.Now().Year() {
-		d = time.Now().UTC()
-	} else {
-		d = time.Date(y, 12, 31, 0, 0, 0, 0, time.UTC)
+func fxDateFromYear(y int) string {
+	if y >= time.Now().Year() {
+		return time.Now().UTC().Format("2006-01-02")
 	}
-
-	return
-}
-
-// formatApiRate formats the api response currency rate received from hnb.hr
-func formatApiRate(r string) float64 {
-	s := strings.ReplaceAll(strings.ReplaceAll(r, ".", ""), ",", ".")
-	if s == "" {
-		log.Fatalf("cannot create amount from %s", s)
-	}
-	s = strings.ReplaceAll(s, ",", "")
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		log.Printf("error parsing float from from %v", err)
-	}
-	return v
+	return strconv.Itoa(y) + "-12-31"
 }

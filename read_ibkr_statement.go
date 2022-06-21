@@ -213,7 +213,7 @@ func amountFromString(s string) float64 {
 	re := regexp.MustCompile(`[0-9.,-]`)
 	ss := strings.Join(re.FindAllString(s, -1), "")
 	isNeg := ss[0] == '-'
-	// Find all commans and points
+	// Find all commas and points
 	// If none found, return 0, print error
 	signs := regexp.MustCompile(`[.,]`).FindAllString(ss, -1)
 	if len(signs) == 0 {

@@ -2,9 +2,9 @@
 > A simple Interactive Brokers .csv statements parser intended to help beginner Croatian investors with tax reporting 
 ## How to use
 #### Running the app
-Download the latest release for your operating system. Move and run the executable file from the root of your directories containing IBKR .csv statements. It will also read subdirectories. After finishing, find the `Portfolio Report.xlsx` spreadsheet in the same directory.
+Download the latest release and run executable from the root of your directories containing IBKR .csv statements. Find the exported `Portfolio Report.xlsx` spreadsheet in the same directory.
 
-#### To consider
+#### Notes
 - The statements must be in .csv format
 - Duplicate filenames found in subdirectories will be ignored, but make sure there are no extra statements duplicating data (u.e. yearly and monthly statements covering the same period)
 

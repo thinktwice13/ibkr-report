@@ -23,7 +23,7 @@ type Instrument struct {
 }
 
 type AssetImport struct {
-	Instrument
+	*Instrument
 	Trades                    []Trade
 	Dividends, WithholdingTax []Transaction
 }
@@ -157,7 +157,7 @@ func (as assets) bySymbols(ss ...string) *AssetImport {
 	if len(ss) == 1 {
 		match, ok := as[ss[0]]
 		if !ok {
-			a := &AssetImport{Instrument: Instrument{Symbols: ss}}
+			a := &AssetImport{Instrument: &Instrument{Symbols: ss}}
 			as[ss[0]] = a
 			return a
 		}
@@ -165,7 +165,7 @@ func (as assets) bySymbols(ss ...string) *AssetImport {
 		return match
 	}
 
-	// Target is the merged asset combining all of the info of incoming symbols and previously included symbols for an instrument
+	// Target is the merged asset combining all the info of incoming symbols and previously included symbols for an instrument
 	// Processed symbols used to avoid processing symbols twice
 	// Unmatched symbols slcie stores incoming symbols not matched with any existing assets. Once any match has been found, not needed anymore
 	var target *AssetImport
@@ -216,7 +216,7 @@ func (as assets) bySymbols(ss ...string) *AssetImport {
 
 	// If still no matches found
 	if target == nil {
-		target = &AssetImport{Instrument: Instrument{Symbols: ss}}
+		target = &AssetImport{Instrument: &Instrument{Symbols: ss}}
 	}
 
 	for _, s := range target.Symbols {
@@ -226,7 +226,7 @@ func (as assets) bySymbols(ss ...string) *AssetImport {
 	return target
 }
 
-// mergeAsset merges information on the assets and jions all founc events: trades, dividends and withholding tax tax
+// mergeAsset merges information on the assets and merges all found events: trades, dividends and withholding tax
 func mergeAsset(src AssetImport, tgt *AssetImport) {
 	found := make(map[string]bool, len(src.Symbols))
 	for _, symbol := range tgt.Symbols {
@@ -236,14 +236,11 @@ func mergeAsset(src AssetImport, tgt *AssetImport) {
 		found[symbol] = true
 	}
 
-	list := make([]string, 0, len(found))
+	tgt.Symbols = make([]string, 0, len(found))
 	for s := range found {
-		list = append(list, s)
+		tgt.Symbols = append(tgt.Symbols, s)
 	}
 
-	tgt.Symbols = list
-
-	// TODO improve and check for mismatch when not empty
 	if tgt.Category == "" && src.Category != "" {
 		tgt.Category = src.Category
 	}
@@ -256,10 +253,10 @@ func mergeAsset(src AssetImport, tgt *AssetImport) {
 // assets maps imported asset information by symbol, for easier lookup while importing
 type assets map[string]*AssetImport
 
-func (a assets) list() []AssetImport {
+func (as *assets) list() []AssetImport {
 	listed := make(map[*AssetImport]bool)
 	var list []AssetImport
-	for _, a := range a {
+	for _, a := range *as {
 		if _, ok := listed[a]; ok {
 			continue
 		}
