@@ -12,13 +12,13 @@ import (
 func readXls(filename string, ir *ImportResults) {
 	f, err := excelize.OpenFile(filename)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 
 	defer func() {
 		// Close the spreadsheet
 		if err := f.Close(); err != nil {
-			fmt.Println(err)
+			fmt.Printf("Error: %v\n", err)
 		}
 	}()
 
@@ -74,7 +74,7 @@ func handleXlsTrades(lines []map[string]string, ir *ImportResults) {
 
 		time, err := xlsTimeFromCall(timeField)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Printf("Error: %v\n", err)
 			continue
 		}
 		ir.AddTrade(symbols[0], lm["Currency"], time, amountFromString(lm["Quantity"]), amountFromString(lm["Price"]), amountFromString(lm["Fee"]))

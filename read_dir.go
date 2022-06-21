@@ -9,6 +9,7 @@ import (
 )
 
 // readDir imports all data found in curent directory
+// Returns lists of imported assets, charged fees and used years and currencies
 func readDir() ([]AssetImport, []Transaction, []int, []string) {
 	ir := NewImportResults()
 	var wg sync.WaitGroup

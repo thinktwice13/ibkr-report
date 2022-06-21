@@ -19,14 +19,13 @@ func main() {
 
 	assets, fees, years, currencies := readDir()
 	if len(assets) == 0 {
-		fmt.Println("No data found. Exiting")
-		os.Exit(0)
+		log.Fatalln("No data found. Exiting")
 	}
 
 	// Fetch currency conversion rates per year
 	rates, err := NewFxRates(currencies, years)
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalf("Error: %v\n", err)
 	}
 
 	// Summarize imported asset events by year
@@ -45,7 +44,7 @@ func main() {
 	err = r.Save()
 	createXlsTemplate()
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalf("Error: %v\n", err)
 	}
 	fmt.Println("Finished in", time.Since(t))
 }

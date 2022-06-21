@@ -10,7 +10,7 @@ import (
 	"strconv"
 )
 
-// Report extends excelize.File type with custom WriteTo method to implement RowWriter interface needed by the reports to be written
+// Report uses excelize.File and implements RowWriter interface needed by the reports to be written
 type Report struct {
 	f        *excelize.File
 	filename string
@@ -32,7 +32,7 @@ func (r *Report) WriteRows(sheet string, rows [][]interface{}) error {
 	err := r.f.AddTable(sheet, "A1", lowerRight, tableOptions())
 
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 	return nil
 }
@@ -41,7 +41,7 @@ func (r *Report) Save() error {
 	r.f.DeleteSheet("Sheet1")
 	err := r.f.SaveAs(filepath.Join(os.Getenv("PWD"), r.filename+".xlsx"))
 	if err != nil {
-		log.Fatalln(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 	fmt.Println(r.filename+".xlsx", "created")
 	return nil
@@ -60,7 +60,7 @@ func RoundDec(v float64, places int) float64 {
 func writeReport(r Reporter, rw RowWriter) {
 	err := r.WriteTo(rw)
 	if err != nil {
-		log.Fatalln(err)
+		log.Fatalf("Error: %v\n", err)
 	}
 }
 
@@ -87,13 +87,13 @@ func createXlsTemplate() {
 		"Fee",
 	})
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 
 	err = f.AddTable("Trades", "A1", "H1001", tableOptions())
 
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 
 	// TODO Sample data
@@ -117,12 +117,12 @@ func createXlsTemplate() {
 		"Amount",
 	})
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 	err = f.AddTable("Dividends", "A1", "F1001", tableOptions())
 
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 
 	f.NewSheet("Withholding Tax")
@@ -135,12 +135,12 @@ func createXlsTemplate() {
 		"Amount",
 	})
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 	err = f.AddTable("Withholding Tax", "A1", "F1001", tableOptions())
 
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 
 	f.NewSheet("Fees")
@@ -151,12 +151,12 @@ func createXlsTemplate() {
 		"Note",
 	})
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 	err = f.AddTable("Fees", "A1", "D1001", tableOptions())
 
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("Error: %v\n", err)
 	}
 
 	f.DeleteSheet("Sheet1")
