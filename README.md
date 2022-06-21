@@ -1,4 +1,4 @@
-# [WIP] ibkr-report [![goreleaser](https://github.com/thinktwice13/ibkr-report/actions/workflows/release.yaml/badge.svg)](https://github.com/thinktwice13/ibkr-report/actions/workflows/release.yaml)
+# [WIP] ibkr-report [![test](https://github.com/thinktwice13/ibkr-report/actions/workflows/test.yaml/badge.svg?branch=main)](https://github.com/thinktwice13/ibkr-report/actions/workflows/test.yaml)
 > A simple Interactive Brokers .csv statements parser intended to help beginner Croatian investors with tax reporting 
 ## How to use
 #### Running the app
