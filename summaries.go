@@ -13,204 +13,227 @@ type AssetYear struct {
 	Year                                         int
 }
 
-// Asset is a summarize asset import
 type Asset struct {
 	// Financial instrument information
 	*Instrument
-	// Time of first purchase
-	FirstPurchase *time.Time
-	// Active holdings according to the FIFO accounting strategy
+	// Active holdings based on FIFO accounting strategy
 	Holdings []Lot
 	// Profits, fees, dividends and withholding tax summarized by year
-	Years []AssetYear
+	ByYear map[int]*AssetYear
 }
 
-type AssetSummary map[int]*AssetYear
+type AssetSummary struct {
+	r     Rater
+	years map[int]*AssetYear
+}
 
-// year returns a requested mapped item. Creates new if does not exist
-func (s AssetSummary) year(y int) *AssetYear {
-	_, ok := s[y]
-	if !ok {
-		s[y] = &AssetYear{Year: y}
+func (as *AssetSummary) AddFee(f *Transaction) {
+	as.year(f.Year).Fees += f.Amount * as.r.Rate(f.Currency, f.Year)
+}
+
+func (as *AssetSummary) AddSale(s *Sale) {
+	for _, c := range s.Basis {
+		salePrice := s.Price * as.r.Rate(s.Currency, s.Time.Year())
+		purchasePrice := c.Price * as.r.Rate(c.Currency, s.Time.Year())
+
+		profit := (salePrice - purchasePrice) * c.Quantity
+		sum := as.year(s.Time.Year())
+		sum.Pl += profit
+		if s.Time.Before(taxableDeadline(c.Time)) {
+			sum.Taxable += profit
+		}
 	}
-	return s[y]
+}
+
+func (as *AssetSummary) AddDividend(d *Transaction) {
+	as.year(d.Year).Dividends += d.Amount * as.r.Rate(d.Currency, d.Year)
+}
+
+func (as *AssetSummary) AddWithholdingTax(t *Transaction) {
+	as.year(t.Year).WithholdingTax += t.Amount * as.r.Rate(t.Currency, t.Year)
+}
+
+// year finds or creates a new AssetYear for the provided year
+func (as *AssetSummary) year(y int) *AssetYear {
+	_, ok := as.years[y]
+	if !ok {
+		as.years[y] = &AssetYear{Year: y}
+	}
+	return as.years[y]
+}
+
+func (as *AssetSummary) List() []AssetYear {
+	list := make([]AssetYear, 0, len(as.years))
+	for _, v := range as.years {
+		list = append(list, *v)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].Year < list[j].Year
+	})
+	return list
+}
+
+type Profiter interface {
+	AddSale(*Sale)
+	AddFee(*Transaction)
+}
+
+type Strategy interface {
+	Buy(Trade)
+	Sell(float64) []Cost
+	Holdings(Rater) []Lot
+}
+
+func TradeAsset(ts []Trade, s Strategy, p Profiter) {
+	if len(ts) == 0 {
+		return
+	}
+
+	// Process trades in chronological order
+	sort.Slice(ts, func(i, j int) bool {
+		return ts[i].Time.Before(ts[j].Time)
+	})
+
+	for i := range ts {
+		t := &ts[i]
+		if t.Fee != 0 {
+			p.AddFee(feeFromTrade(t))
+		}
+
+		// Add to cost basis strategy of a purchase
+		if t.Quantity > 0 {
+			s.Buy(*t)
+			continue
+		}
+
+		p.AddSale(&Sale{
+			TradeTx: t.TradeTx,
+			Basis:   s.Sell(t.Quantity),
+		})
+	}
+}
+
+func feeFromTrade(t *Trade) *Transaction {
+	return &Transaction{
+		Currency: t.Currency,
+		Amount:   t.Fee,
+		Year:     t.Time.Year(),
+	}
 }
 
 type AssetSummaries []Asset
 
 type Rater interface {
 	Rate(string, int) float64
+	Len() int
 }
 
-// summarizeAssets returns a list of summarized asset imports, given a list of imports and a type implementing a Rater if
-func summarizeAssets(imports []AssetImport, r Rater) AssetSummaries {
-	assets := make(AssetSummaries, len(imports))
-
-	for i, ai := range imports {
-		// Sort imported trades by date
-		// Must be sorted for cost basis accounting strategy
-		sort.Slice(ai.Trades, func(i, j int) bool {
-			return ai.Trades[i].Time.Before(ai.Trades[j].Time)
-		})
-
-		// sales, fees, active holdings
-		// Calculate summary size for the asset
-		sales, fees, holdings := tradeAsset(ai.Trades)
-
-		toYear := time.Now().Year()
-		firstYear := toYear
-		if len(ai.Trades) != 0 {
-			firstYear = ai.Trades[0].Time.Year()
-			if len(*holdings) == 0 {
-				toYear = ai.Trades[len(ai.Trades)-1].Time.Year()
-			}
-		}
-		sum := make(AssetSummary, toYear-firstYear+1)
-
-		// Calculate profits from sales and summarize
-		// TODO Extract and test
-		for _, s := range *sales {
-			// Find matching summary year for the time of sale
-			// Compare sale transaction to each of its cost fragments and calculate profit and tax
-			y := sum.year(s.Time.Year())
-			for _, c := range s.Basis {
-				proceeds := s.Price * c.Quantity * r.Rate(s.Currency, s.Time.Year())
-				cost := c.Price * c.Quantity * r.Rate(c.Currency, s.Time.Year())
-				y.Pl += proceeds - cost
-				if s.Time.After(taxableDeadline(c.Time)) {
-					continue
-				}
-				y.Taxable += proceeds - cost
-			}
-		}
-
-		// Trading Fees
-		for _, f := range *fees {
-			sum.year(f.Year).Fees += f.Amount * r.Rate(f.Currency, f.Year)
-		}
-
-		// Dividends
-		for _, d := range ai.Dividends {
-			amt := d.Amount * r.Rate(d.Currency, d.Year)
-			sum.year(d.Year).Dividends += amt
-		}
-		// Withholding Tax
-		for _, t := range ai.WithholdingTax {
-			amt := t.Amount * r.Rate(t.Currency, t.Year)
-			sum.year(t.Year).WithholdingTax += amt
-		}
-
-		a := Asset{
-			Instrument: ai.Instrument,
-			Holdings:   lotsFromTrades(*holdings, r),
-			Years:      make([]AssetYear, 0, len(sum)),
-		}
-
-		if len(ai.Trades) != 0 {
-			a.FirstPurchase = &ai.Trades[0].Time
-		}
-
-		for _, data := range sum {
-			a.Years = append(a.Years, *data)
-		}
-
-		assets[i] = a // TODO Insertion sort / use channel
+func NewAssetSummary(r Rater, size int) *AssetSummary {
+	return &AssetSummary{
+		r:     r,
+		years: make(map[int]*AssetYear, size),
 	}
+}
 
-	sortAssets(assets)
-	return assets
+// assetSummaries returns a list of summarized asset imports, given a list of imports and a type implementing a Rater if
+// TODO Concurrent prices search
+func assetSummaries(imports []AssetImport, r Rater) AssetSummaries {
+	summaries := make(AssetSummaries, 0, len(imports))
+	for i := range imports {
+		ai := &imports[i]
+		sum := NewAssetSummary(r, r.Len())
+		fifo := new(fifo)
+		TradeAsset(ai.Trades, fifo, sum)
+
+		// Summarize dividends and withholding tax
+		for i := range ai.Dividends {
+			sum.AddDividend(&ai.Dividends[i])
+		}
+		for i := range ai.WithholdingTax {
+			sum.AddWithholdingTax(&ai.WithholdingTax[i])
+		}
+
+		summaries = append(summaries, Asset{
+			Instrument: ai.Instrument,
+			Holdings:   fifo.Holdings(r),
+			ByYear:     sum.years,
+		})
+	}
+	return summaries
 }
 
 type fifo struct {
-	data []Trade
+	data []Cost
+}
+
+func (f *fifo) Buy(t Trade) {
+	f.data = append(f.data, Cost{
+		TradeTx:  t.TradeTx,
+		Quantity: t.Quantity,
+	})
+}
+
+// Sell returns the cost basis of the given quantity of shares
+func (f *fifo) Sell(qty float64) []Cost {
+	if qty >= 0 {
+		fmt.Println("Sell quantity must be negative")
+		return nil
+	}
+
+	var costs []Cost
+	// Remove shares from the front of the queue until the quantity is reached or the queue is empty
+	for {
+		if qty == 0 {
+			break
+		}
+
+		//
+		if len(f.data) == 0 {
+			f.data = nil
+			return nil
+		}
+
+		p := f.next()
+		cost := *p
+		cost.Quantity = math.Min(p.Quantity, math.Abs(qty))
+
+		// Update quantity of lot to be sold
+		p.Quantity -= cost.Quantity
+		qty += cost.Quantity
+		costs = append(costs, cost)
+
+		// If lot is fully sold, remove it from the list
+		if p.Quantity == 0 {
+			f.data = f.data[1:]
+		}
+	}
+	return costs
+}
+
+func (f *fifo) next() *Cost {
+	if len(f.data) == 0 {
+		return nil
+	}
+	return &f.data[0]
+}
+
+func (f *fifo) Holdings(r Rater) []Lot {
+	return lotsFromTrades(f.data, r)
 }
 
 type Cost struct {
-	Time            time.Time
-	Currency        string
-	Price, Quantity float64
+	*TradeTx
+	Quantity float64
 }
 
 type Sale struct {
-	Time     time.Time
-	Currency string
-	Price    float64
-	Basis    []Cost
-}
-
-// tradeAsset calculates sales, fees and active holdings according to cost basis strategy (FIFO)
-// TODO use other strategies
-// TODO Test!
-func tradeAsset(ts []Trade) (*[]Sale, *[]Transaction, *[]Trade) {
-	if len(ts) == 0 {
-		return nil, nil, nil
-	}
-
-	fifo := new(fifo)
-	fees := make([]Transaction, 0, len(ts))
-
-	var sales []Sale
-	for i, t := range ts {
-		if t.Fee != 0 {
-			fees = append(fees, Transaction{
-				Currency: t.Currency,
-				Amount:   t.Fee,
-				Year:     t.Time.Year(),
-			})
-		}
-
-		// Add to cost basis strategy if a purchase
-		if t.Quantity > 0 {
-			// Purchase
-			fifo.data = append(fifo.data, ts[i]) // TODO strategy specific
-			continue
-		}
-
-		// Sale
-		s := Sale{
-			Time:     t.Time,
-			Currency: t.Currency,
-			Price:    t.Price,
-		}
-		// Calculate costs
-		for {
-			// If trade order fulfilled, break out
-			if t.Quantity == 0 {
-				sales = append(sales, s)
-				break
-			}
-
-			// Find next purchase to calculate cost basis from
-			// Deduct sold quantity from purchase used to calculate the cost basis and sale trade being processed
-			// Add costs to currency sale
-			if len(fifo.data) == 0 {
-				fmt.Println("error calculating trades for asset")
-				return nil, nil, nil
-			}
-			purchase := &fifo.data[0] // TODO strategy specific
-			cost := Cost{
-				Time:     purchase.Time,
-				Currency: purchase.Currency,
-				Price:    purchase.Price,
-				Quantity: math.Min(purchase.Quantity, math.Abs(t.Quantity)),
-			}
-			purchase.Quantity -= cost.Quantity
-			t.Quantity += cost.Quantity
-			s.Basis = append(s.Basis, cost)
-
-			// Evict entire purchase if completely sold
-			if purchase.Quantity == 0 {
-				fifo.data = fifo.data[1:]
-			}
-		}
-	}
-
-	return &sales, &fees, &fifo.data
+	*TradeTx
+	Basis []Cost
 }
 
 // taxableDeadline determines the last date profits can be taxed
-// Tax introduced 1/1/2016. For any deadlines before, return provided date
-// For any taxable events provided after 1/1/2016, calculate deadline at 24 months after provided time
+// Tax introduced for assets purchased after 31/12/2015. For any deadlines before, return provided date
+// For any taxable events provided after the 31/12/2015, calculate deadline at 24 months after provided time
 func taxableDeadline(since time.Time) time.Time {
 	if since.Before(time.Date(2016, 1, 1, 1, 0, 0, 0, time.UTC)) {
 		return since
@@ -227,7 +250,7 @@ func (s *AssetSummaries) WriteTo(rw RowWriter) error {
 	srows = append(srows, []interface{}{
 		"Asset",
 		"Category",
-		"Year",
+		"yr",
 		"Profit/Loss",
 		"Taxable PL",
 		"Fees",
@@ -245,7 +268,7 @@ func (s *AssetSummaries) WriteTo(rw RowWriter) error {
 	})
 
 	for _, a := range *s {
-		for _, y := range a.Years {
+		for _, y := range a.ByYear {
 			srows = append(srows, []interface{}{
 				a.Symbols,
 				a.Category,
@@ -290,40 +313,28 @@ type Lot struct {
 	Quantity     float64
 }
 
-func lotsFromTrades(ts []Trade, r Rater) []Lot {
-	lots := make([]Lot, len(ts))
-	for i, t := range ts {
-		td := taxableDeadline(t.Time)
-		tu := &td
+func lotsFromTrades(cs []Cost, r Rater) []Lot {
+	if len(cs) == 0 {
+		return nil
+	}
+
+	lots := make([]Lot, len(cs))
+	for i, c := range cs {
+		cost := taxableDeadline(c.Time)
+		tu := &cost
 		if tu.Before(time.Now()) {
 			tu = nil
 		}
 		lots[i] = Lot{
-			Purchased:    t.Time,
+			Purchased:    c.Time,
 			TaxableUntil: tu,
-			Cost:         t.Quantity * t.Price * r.Rate(t.Currency, t.Time.Year()),
-			Quantity:     t.Quantity,
+			Cost:         c.Quantity * c.Price * r.Rate(c.Currency, c.Time.Year()),
+			Quantity:     c.Quantity,
 		}
 	}
-	// TODO When other cost basis strategy used, trades slice might come in ordered by something other than purchase date. Sort here
-	return lots
-}
 
-// sortAssets sorts summarized assets and their yearly summaries in chronological order
-func sortAssets(as []Asset) {
-	for _, a := range as {
-		sort.Slice(a.Years, func(i, j int) bool {
-			return a.Years[i].Year < a.Years[j].Year
-		})
-	}
-
-	sort.Slice(as, func(i, j int) bool {
-		if as[i].FirstPurchase == nil {
-			return true
-		}
-		if as[j].FirstPurchase == nil {
-			return false
-		}
-		return as[i].FirstPurchase.Before(*as[j].FirstPurchase)
+	sort.Slice(lots, func(i, j int) bool {
+		return lots[i].Purchased.Before(lots[j].Purchased)
 	})
+	return lots
 }

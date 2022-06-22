@@ -5,14 +5,6 @@ import (
 	"sort"
 )
 
-type Reporter interface {
-	WriteTo(RowWriter) error
-}
-
-type RowWriter interface {
-	WriteRows(string, [][]interface{}) error
-}
-
 // CapitalGains represents a year of capital gains to be reported for taxes
 type CapitalGains struct {
 	Pl, Fees, Dividends float64
@@ -24,35 +16,23 @@ type FgnIncome struct {
 	Src               string
 }
 
-// taxYear is a temporary type used to summarize income from multiple assets
-type taxYear struct {
-	CapitalGains
-	taxedForeignIncome map[string]*FgnIncome
-}
-
-type TaxReport []TaxYear
-
-// TaxYear is similar to taxYear, but
+// TaxYear is a temporary type used to summarize income from multiple assets
 type TaxYear struct {
 	CapitalGains
-	TaxedForeignIncome []FgnIncome
-	Year               int
+	FgnIncomeBySrc map[string]*FgnIncome
+	yr             int
 }
 
-type taxByYear map[int]*taxYear
+// TaxReport is a temporary type used to summarize income from multiple assets
+type TaxReport map[int]*TaxYear
 
-// taxReport builds a yearly tax report provided a list of summarized assets and portfolio fees
+// taxReports builds a yearly tax report provided a list of summarized assets and portfolio fees
 // Returns a slice of tax years to be reported
-func taxReport(assets []Asset, fees []YearAmount, yrs int) TaxReport {
-	r := make(taxByYear, yrs)
-
-	// Add portfolio fees first to use as a deductible when adding profits
-	for _, f := range fees {
-		r.year(f.Year).Fees += f.Amount
-	}
-
+func taxReports(assets []Asset, fees []YearAmount, r TaxReport) TaxReport {
+	// Tax all assets' taxable sales profits and equity dividends
+	// Apply fees as a deductible from sales profits
 	for _, a := range assets {
-		for _, sum := range a.Years {
+		for _, sum := range a.ByYear {
 			y := r.year(sum.Year)
 
 			// Profits
@@ -60,11 +40,11 @@ func taxReport(assets []Asset, fees []YearAmount, yrs int) TaxReport {
 			y.Fees += sum.Fees
 
 			// Dividends
-			// Do not report dividend income for non-equity assets
+			// Only report dividends income for equity assets. Assume Equity (taxable) for empty category // TODO Search category when empty
 			// If asset has tax withheld in a given year, report all of the dividends and tax paid as foreign taxed income. Froup by country of origin
 			// Otherwise, report received dividends as capital gains
+			// TODO Check if profits should be reported in the same report ig any tax has been withheld
 			// TODO search info when category empty
-			// Only Equity dividends are taxable. Assume Equity for empty category
 			if !(a.Category == "Equity" || a.Category == "") {
 				continue
 			}
@@ -79,101 +59,92 @@ func taxReport(assets []Asset, fees []YearAmount, yrs int) TaxReport {
 		}
 	}
 
-	// Adjust profits: Deduct fees paid in a year from positive yearly profits
-	// Report zero profit for years ending in negative profits
+	// Apply fees as a deductible from capital gains
+	for _, f := range fees {
+		r.year(f.Year).Fees += f.Amount
+	}
+
+	// Adjust capital gains report: Deduct fees paid in a year from positive yearly sales profits
+	// Report zero profit for years ending in negative profit
+	// Deduct fees from profit if profit positive
 	// Delete entire year from report if profit is zero and no dividends received
 	for _, y := range r {
 		if y.Pl <= 0 {
 			y.Pl = 0
-		} else {
-			deductible := math.Min(y.Pl, math.Abs(y.Fees))
-			y.Pl -= deductible
-			y.Fees += deductible
+			continue
 		}
+		deducted := math.Min(y.Pl, math.Abs(y.Fees))
+		y.Pl -= deducted
+		y.Fees += deducted
 	}
 
-	return r.toList()
+	return r
 }
 
-func (r taxByYear) toList() TaxReport {
-	list := make(TaxReport, 0, len(r))
-	for y, tax := range r {
-		ty := TaxYear{
-			CapitalGains:       tax.CapitalGains,
-			TaxedForeignIncome: nil,
-			Year:               y,
-		}
-
-		if len(tax.taxedForeignIncome) != 0 {
-			for src, income := range tax.taxedForeignIncome {
-				income.Src = src
-				ty.TaxedForeignIncome = append(ty.TaxedForeignIncome, *income)
-			}
-
-			sort.Slice(ty.TaxedForeignIncome, func(i, j int) bool {
-				return ty.TaxedForeignIncome[i].Src < ty.TaxedForeignIncome[j].Src
-			})
-		}
-
-		list = append(list, ty)
-	}
-
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].Year < list[j].Year
-	})
-
-	return list
-}
-
-func (r taxByYear) year(y int) *taxYear {
+// year finds or creates a tax year for the given year
+func (r TaxReport) year(y int) *TaxYear {
 	_, ok := r[y]
 	if !ok {
-		r[y] = &taxYear{
-			taxedForeignIncome: map[string]*FgnIncome{},
+		r[y] = &TaxYear{
+			FgnIncomeBySrc: map[string]*FgnIncome{},
+			yr:             y,
 		}
 	}
 	return r[y]
 }
 
-func (y *taxYear) incomeSource(src string) *FgnIncome {
-	_, ok := y.taxedForeignIncome[src]
+// incomeSource finds or creates a foreign income source recorded in the given tax year
+func (y *TaxYear) incomeSource(src string) *FgnIncome {
+	_, ok := y.FgnIncomeBySrc[src]
 	if !ok {
-		y.taxedForeignIncome[src] = new(FgnIncome)
+		y.FgnIncomeBySrc[src] = &FgnIncome{Src: src}
 	}
-	return y.taxedForeignIncome[src]
+	return y.FgnIncomeBySrc[src]
 }
 
-func (r *TaxReport) WriteTo(rw RowWriter) error {
-	jrows := make([][]interface{}, 1, len(*r))
+func (r TaxReport) WriteTo(rw RowWriter) error {
+	list := make([]*TaxYear, 0, len(r))
+	for _, y := range r {
+		list = append(list, y)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].yr < list[j].yr
+	})
+
+	jrows := make([][]interface{}, 1, len(r))
 	jrows[0] = []interface{}{
-		"Year",
+		"yr",
 		"Dividends",
 		"Profit/Loss",
 		"Deductible",
 	}
-	irows := make([][]interface{}, 1, len(*r))
+	irows := make([][]interface{}, 1, len(r))
 	irows[0] = []interface{}{
-		"Year",
+		"yr",
 		"Income Source",
 		"Received",
 		"Withholding Tax",
 	}
 
-	for _, y := range *r {
+	for _, y := range list {
+		fgnIncomeYrs := make([]*FgnIncome, 0, len(y.FgnIncomeBySrc))
+		for _, fgnIncome := range y.FgnIncomeBySrc {
+			fgnIncomeYrs = append(fgnIncomeYrs, fgnIncome)
+		}
+		sort.Slice(fgnIncomeYrs, func(i, j int) bool {
+			return fgnIncomeYrs[i].Src < fgnIncomeYrs[j].Src
+		})
+
 		jrows = append(jrows, []interface{}{
-			y.Year,
+			y.yr,
 			RoundDec(y.Dividends, 2),
 			RoundDec(y.Pl, 2),
 			RoundDec(y.Fees, 2),
 		})
 
-		if y.TaxedForeignIncome == nil {
-			continue
-		}
-
-		for _, fi := range y.TaxedForeignIncome {
+		for _, fi := range fgnIncomeYrs {
 			irows = append(irows, []interface{}{
-				y.Year,
+				y.yr,
 				fi.Src,
 				RoundDec(fi.Received, 2),
 				RoundDec(fi.TaxPaid, 2),

@@ -15,41 +15,29 @@ var maxWorkers int
 func main() {
 	t := time.Now()
 	maxWorkers = runtime.NumCPU()
-	SetPWD()
-
-	assets, fees, years, currencies := readDir()
-	if len(assets) == 0 {
-		log.Fatalln("No data found. Exiting")
+	setPWD()
+	ir := readDir()
+	if len(ir.assets) == 0 {
+		log.Fatalf("No portfolio data found in %s\n", os.Getenv("PWD"))
 	}
 
-	// Fetch currency conversion rates per year
-	rates, err := NewFxRates(currencies, years)
-	if err != nil {
-		log.Fatalf("Error: %v\n", err)
-	}
+	rates := NewFxRates(list(ir.currencies), list(ir.years))
+	tr := make(TaxReport, len(list(ir.years)))
+	summaries := assetSummaries(ir.assets.list(), rates)
+	// TODO Search prices
+	taxReports(summaries, convFees(ir.fees, rates), tr)
 
-	// Summarize imported asset events by year
-	summaries := summarizeAssets(assets, rates)
+	f := NewReport("Portfolio Report")
+	summaries.WriteTo(f)
+	tr.WriteTo(f)
+	f.Save()
 
-	// Convert global fees (not related to asset events)
-	convFees := convertFees(fees, rates)
-
-	// Build tax report from asset summaries
-	tr := taxReport(summaries, convFees, len(years))
-
-	// Write asset summaries and tax reports to spreadsheet
-	r := NewReport("Portfolio Report")
-	writeReport(&tr, r)
-	writeReport(&summaries, r)
-	err = r.Save()
 	createXlsTemplate()
-	if err != nil {
-		log.Fatalf("Error: %v\n", err)
-	}
 	fmt.Println("Finished in", time.Since(t))
 }
 
-func SetPWD() {
+// setPWD sets the current working directory to the directory of the executable
+func setPWD() {
 	if os.Getenv("GOPATH") == "" {
 		dirErr := "could not read directory"
 		exec, err := os.Executable()
@@ -61,6 +49,26 @@ func SetPWD() {
 			log.Fatalln(dirErr)
 		}
 	}
+}
+
+// writeFile writes items received on the reporters channel to a spreadsheet file
+func writeFile(rs <-chan Reporter) <-chan bool {
+	done := make(chan bool, 1)
+	go func() {
+		file := NewReport("Portfolio Report")
+		for r := range rs {
+			err := r.WriteTo(file)
+			if err != nil {
+				log.Fatalf("Error: %v\n", err)
+			}
+		}
+		err := file.Save()
+		if err != nil {
+			log.Fatalf("Error: %v\n", err)
+		}
+		done <- true
+	}()
+	return done
 }
 
 func PrettyPrint(a any) {

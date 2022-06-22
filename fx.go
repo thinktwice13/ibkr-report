@@ -33,7 +33,7 @@ func (r *Rates) setRates(y int, rates map[string]float64) {
 
 // NewFxRates creates a new Rates struct by fetching currency exhange rates for provided years and currencies
 // TODO Do not fetch in New
-func NewFxRates(currencies []string, years []int) (*Rates, error) {
+func NewFxRates(currencies []string, years []int) *Rates {
 	r := &Rates{
 		l:     new(sync.Mutex),
 		rates: map[int]map[string]float64{},
@@ -67,7 +67,7 @@ func NewFxRates(currencies []string, years []int) (*Rates, error) {
 
 	close(yrs)
 	wg.Wait()
-	return r, nil
+	return r
 }
 
 // TODO Other currencies https://ec.europa.eu/info/funding-tenders/procedures-guidelines-tenders/information-contractors-and-beneficiaries/exchange-rate-inforeuro_en
@@ -131,6 +131,10 @@ func grabFxRates(year int, c []string, retries int) (map[string]float64, error) 
 	}
 
 	return rm, nil
+}
+
+func (r *Rates) Len() int {
+	return len(r.rates)
 }
 
 // fxDateFromYear calculates last day of the year for the input
