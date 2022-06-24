@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"math"
 	"sort"
 	"time"
 )
@@ -78,12 +76,6 @@ type Profiter interface {
 	AddFee(*Transaction)
 }
 
-type Strategy interface {
-	Buy(Trade)
-	Sell(float64) []Cost
-	Holdings(Rater) []Lot
-}
-
 func TradeAsset(ts []Trade, s Strategy, p Profiter) {
 	if len(ts) == 0 {
 		return
@@ -95,17 +87,20 @@ func TradeAsset(ts []Trade, s Strategy, p Profiter) {
 	})
 
 	for i := range ts {
+		// Always send fees to Profites
 		t := &ts[i]
 		if t.Fee != 0 {
 			p.AddFee(feeFromTrade(t))
 		}
 
-		// Add to cost basis strategy of a purchase
+		// If this trade is a purchase, send to costbasis strategy
 		if t.Quantity > 0 {
 			s.Buy(*t)
 			continue
 		}
 
+		// It is sale
+		// Find cost basis from strategy used and send sale to Profiter
 		p.AddSale(&Sale{
 			TradeTx: t.TradeTx,
 			Basis:   s.Sell(t.Quantity),
@@ -160,65 +155,6 @@ func assetSummaries(imports []AssetImport, r Rater) AssetSummaries {
 		})
 	}
 	return summaries
-}
-
-type fifo struct {
-	data []Cost
-}
-
-func (f *fifo) Buy(t Trade) {
-	f.data = append(f.data, Cost{
-		TradeTx:  t.TradeTx,
-		Quantity: t.Quantity,
-	})
-}
-
-// Sell returns the cost basis of the given quantity of shares
-func (f *fifo) Sell(qty float64) []Cost {
-	if qty >= 0 {
-		fmt.Println("Sell quantity must be negative")
-		return nil
-	}
-
-	var costs []Cost
-	// Remove shares from the front of the queue until the quantity is reached or the queue is empty
-	for {
-		if qty == 0 {
-			break
-		}
-
-		//
-		if len(f.data) == 0 {
-			f.data = nil
-			return nil
-		}
-
-		p := f.next()
-		cost := *p
-		cost.Quantity = math.Min(p.Quantity, math.Abs(qty))
-
-		// Update quantity of lot to be sold
-		p.Quantity -= cost.Quantity
-		qty += cost.Quantity
-		costs = append(costs, cost)
-
-		// If lot is fully sold, remove it from the list
-		if p.Quantity == 0 {
-			f.data = f.data[1:]
-		}
-	}
-	return costs
-}
-
-func (f *fifo) next() *Cost {
-	if len(f.data) == 0 {
-		return nil
-	}
-	return &f.data[0]
-}
-
-func (f *fifo) Holdings(r Rater) []Lot {
-	return lotsFromTrades(f.data, r)
 }
 
 type Cost struct {

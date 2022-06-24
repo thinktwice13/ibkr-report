@@ -23,6 +23,7 @@ func main() {
 
 	rates := NewFxRates(list(ir.currencies), list(ir.years))
 	tr := make(TaxReport, len(list(ir.years)))
+
 	summaries := assetSummaries(ir.assets.list(), rates)
 	// TODO Search prices
 	taxReports(summaries, convFees(ir.fees, rates), tr)

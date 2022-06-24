@@ -31,7 +31,7 @@ func (r *Rates) setRates(y int, rates map[string]float64) {
 	r.rates[y] = rates
 }
 
-// NewFxRates creates a new Rates struct by fetching currency exhange rates for provided years and currencies
+// NewFxRates creates a new Rates struct by fetching currency exchange rates for provided years and currencies
 // TODO Do not fetch in New
 func NewFxRates(currencies []string, years []int) *Rates {
 	r := &Rates{
@@ -40,7 +40,6 @@ func NewFxRates(currencies []string, years []int) *Rates {
 	}
 	var wg sync.WaitGroup
 
-	// By default, use global max workers. Reduce if number of years to fetch rates for is lower
 	workers := maxWorkers
 	if len(years) < maxWorkers {
 		workers = len(years)
@@ -61,6 +60,7 @@ func NewFxRates(currencies []string, years []int) *Rates {
 		}(r, yrs, &wg)
 	}
 
+	// Queue years to fetch currency rates for
 	for _, y := range years {
 		yrs <- y
 	}
@@ -70,7 +70,7 @@ func NewFxRates(currencies []string, years []int) *Rates {
 	return r
 }
 
-// TODO Other currencies https://ec.europa.eu/info/funding-tenders/procedures-guidelines-tenders/information-contractors-and-beneficiaries/exchange-rate-inforeuro_en
+// rateResponse is the response from hnb.hr
 type rateResponse struct {
 	Currency string `json:"Valuta"`
 	Rate     string `json:"Srednji za devize"`
@@ -79,9 +79,6 @@ type rateResponse struct {
 type ratesResponse struct {
 	Rates []rateResponse `json:"rates"`
 }
-
-// Fetch HRK fx rates
-// NOTE: Change this section to change source and currency for the reports
 
 // grabFxRates fetches HRK exchange rates for a list of currencies in a provided year from hnb.hr
 func grabFxRates(year int, c []string, retries int) (map[string]float64, error) {
