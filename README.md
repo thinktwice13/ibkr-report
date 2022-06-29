@@ -11,9 +11,9 @@ Download the latest release and run executable from the root of your directories
 If running for the first time, app will also create a `Portfolio Tracker.xlsx` file you can use to add data from other brokers. [See below](#how-to-template)
 
 ### Reading the Report
-All currencies are in `HRK` (taken from [hnb.hr](https://www.hnb.hr/temeljne-funkcije/monetarna-politika/tecajna-lista/tecajna-lista))
+All values are in `HRK` (conversion rates from [hnb.hr](https://www.hnb.hr/temeljne-funkcije/monetarna-politika/tecajna-lista/tecajna-lista))
 
-**INO-DOH** sheet matches the same tax report; shows taxed income by source country. Asset countries are determined by reading the provided `ISIN` numbers. If no `ISIN` found, an asset symbol will be used. [See Todos](#todo)
+**INO-DOH** sheet matches the tax report; shows taxed income by source country. Asset countries are determined by reading the provided `ISIN` numbers. If no `ISIN` found, an asset symbol will be used. [See Todos](#todo)
 
 **JOPPD** sheet combines two yearly `JOPPD` reports - realized profits (FIFO method) and dividends. It also considers fees and charges not related to any of the assets (i.e. broker subscription). `JOPPD` report deducts fees from any positive realized profits, but not from the dividend income for the year.
 
@@ -33,9 +33,9 @@ All currencies are in `HRK` (taken from [hnb.hr](https://www.hnb.hr/temeljne-fun
 - Search current holding prices;
 - Search asset domicile for INO-DOH report when `ISIN` not provided;
 - Search asset categories when not provided;
-- Other accounting methods: ACB, LIFO, HIFO, LCFO, LGUT, SLID. For fun;
 - Choose directory path for statements;
-- Choose report currency, change default to EUR in 2023
+- Choose report currency, change default to EUR in 2023;
+- Other accounting methods: ACB, LIFO, HIFO, LCFO, LGUT, SLID;
 - Other brokers
 
 
