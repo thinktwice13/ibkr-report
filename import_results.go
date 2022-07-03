@@ -11,10 +11,15 @@ type Transaction struct {
 	Year     int
 }
 
+type TradeTx struct {
+	Time     time.Time
+	Price    float64
+	Currency string
+}
+
 type Trade struct {
-	Time                 time.Time
-	Currency             string
-	Price, Quantity, Fee float64
+	*TradeTx
+	Quantity, Fee float64
 }
 
 type Instrument struct {
@@ -32,7 +37,7 @@ type ImportResults struct {
 	assets assets
 
 	// List of transactions not related to any specific asset
-	// i.e. broker subsctiptions
+	// i.e. broker subscriptions, fees, commissions, etc
 	fees []Transaction
 
 	// Mapped unique currencies and years found in any imported events
@@ -44,7 +49,7 @@ type ImportResults struct {
 
 // Domicile extracts the instrument country code used fo the ForeignIncome tax report
 // Requires ISIN to be one of the symbols to work properly
-// Fallback if the first symbol foundn in the symbols array
+// Fallback is first symbol found in the symbols array
 func (i *Instrument) Domicile() string {
 	var isin string
 	for _, symbol := range i.Symbols {
@@ -63,7 +68,7 @@ func (i *Instrument) Domicile() string {
 }
 
 // NewImportResults initializes new import results struct
-// Sets default surrencies
+// Sets default currencies
 // Sets default year to current year
 func NewImportResults() *ImportResults {
 	return &ImportResults{
@@ -96,13 +101,7 @@ func (r *ImportResults) AddTrade(sym, ccy string, tm *time.Time, qty, price, fee
 	r.l.Lock()
 	defer r.l.Unlock()
 	a := r.assets.bySymbols(sym)
-	t := Trade{}
-	t.Currency = ccy
-	t.Time = *tm
-	t.Quantity = qty
-	t.Price = price
-	t.Fee = fee
-	a.Trades = append(a.Trades, t)
+	a.Trades = append(a.Trades, Trade{TradeTx: &TradeTx{Time: *tm, Price: price, Currency: ccy}, Quantity: qty, Fee: fee})
 
 	r.currencies[ccy] = true
 	r.years[tm.Year()] = true
@@ -272,7 +271,7 @@ type YearAmount struct {
 	Year   int
 }
 
-func convertFees(fees []Transaction, r Rater) []YearAmount {
+func convFees(fees []Transaction, r Rater) []YearAmount {
 	converted := make([]YearAmount, len(fees))
 	for i := range fees {
 		f := &fees[i]

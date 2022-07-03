@@ -3,12 +3,19 @@ package main
 import (
 	"fmt"
 	"github.com/xuri/excelize/v2"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 )
+
+type Reporter interface {
+	WriteTo(RowWriter) error
+}
+
+type RowWriter interface {
+	WriteRows(string, [][]interface{}) error
+}
 
 // Report uses excelize.File and implements RowWriter interface needed by the reports to be written
 type Report struct {
@@ -16,6 +23,7 @@ type Report struct {
 	filename string
 }
 
+// WriteRows writes a list of rows to a given sheet
 func (r *Report) WriteRows(sheet string, rows [][]interface{}) error {
 	r.f.NewSheet(sheet)
 
@@ -57,26 +65,31 @@ func RoundDec(v float64, places int) float64 {
 	return math.Round(v*f) / f
 }
 
-func writeReport(r Reporter, rw RowWriter) {
-	err := r.WriteTo(rw)
-	if err != nil {
-		log.Fatalf("Error: %v\n", err)
-	}
-}
-
 func createXlsTemplate() {
 	filename := "Portfolio Tracker.xlsx"
-	fpath := filepath.Join(os.Getenv("PWD"), filename)
-	var err error
+	path := filepath.Join(os.Getenv("PWD"), filename)
 
-	_, err = os.Stat(fpath)
+	// Cancel if template file already exists
+	_, err := os.Stat(path)
 	if err == nil {
 		return
 	}
 
+	// Print all errors
+	errs := make(chan error)
+	go func() {
+		for err := range errs {
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+			}
+		}
+	}()
+
 	f := excelize.NewFile()
+
+	// Prepare Trades Sheet
 	f.NewSheet("Trades")
-	err = f.SetSheetRow("Trades", "A1", &[]interface{}{
+	errs <- f.SetSheetRow("Trades", "A1", &[]interface{}{
 		"Broker",
 		"Asset",
 		"Asset Category",
@@ -86,15 +99,8 @@ func createXlsTemplate() {
 		"Price",
 		"Fee",
 	})
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
 
-	err = f.AddTable("Trades", "A1", "H1001", tableOptions())
-
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
+	errs <- f.AddTable("Trades", "A1", "H1001", tableOptions())
 
 	// TODO Sample data
 	// f.SetSheetRow("Trades", "A2", &[]interface{}{
@@ -107,62 +113,47 @@ func createXlsTemplate() {
 	// 	-4.2,
 	// })
 
+	// Prepare Dividends Sheet
 	f.NewSheet("Dividends")
-	err = f.SetSheetRow("Dividends", "A1", &[]interface{}{
+	errs <- f.SetSheetRow("Dividends", "A1", &[]interface{}{
 		"Broker",
 		"Asset",
 		"Asset Category",
 		"Currency",
-		"Year",
+		"yr",
 		"Amount",
 	})
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
-	err = f.AddTable("Dividends", "A1", "F1001", tableOptions())
 
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
+	errs <- f.AddTable("Dividends", "A1", "F1001", tableOptions())
 
+	// Prepare Withholding Tax Sheet
 	f.NewSheet("Withholding Tax")
-	err = f.SetSheetRow("Withholding Tax", "A1", &[]interface{}{
+	errs <- f.SetSheetRow("Withholding Tax", "A1", &[]interface{}{
 		"Broker",
 		"Asset",
 		"Asset Category",
 		"Currency",
-		"Year",
+		"yr",
 		"Amount",
 	})
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
-	err = f.AddTable("Withholding Tax", "A1", "F1001", tableOptions())
 
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
+	errs <- f.AddTable("Withholding Tax", "A1", "F1001", tableOptions())
 
+	// Prepare Fees Sheet
 	f.NewSheet("Fees")
-	err = f.SetSheetRow("Fees", "A1", &[]interface{}{
+	errs <- f.SetSheetRow("Fees", "A1", &[]interface{}{
 		"Currency",
-		"Year",
+		"yr",
 		"Amount",
 		"Note",
 	})
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
-	err = f.AddTable("Fees", "A1", "D1001", tableOptions())
 
-	if err != nil {
-		fmt.Printf("Error: %v\n", err)
-	}
+	errs <- f.AddTable("Fees", "A1", "D1001", tableOptions())
 
 	f.DeleteSheet("Sheet1")
-	err = f.SaveAs(fpath)
+	err = f.SaveAs(path)
 	if err != nil {
-		fmt.Println("error creating tracker template")
+		fmt.Println("error saving tracker template")
 	}
 }
 
@@ -177,7 +168,7 @@ func tableOptions() string {
     }`
 }
 
-// genColumns generates a slice of strings representing spreadsheet column letters up to a provided size
+// genColumns generates a list of excel column labels up to n columns
 func genColumns(n int) []string {
 	a := 65
 	z := 90

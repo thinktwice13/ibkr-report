@@ -8,9 +8,8 @@ import (
 	"sync"
 )
 
-// readDir imports all data found in curent directory
-// Returns lists of imported assets, charged fees and used years and currencies
-func readDir() ([]AssetImport, []Transaction, []int, []string) {
+// readDir reads all files in the current directory and returns a list of assets, fees and years and currencies
+func readDir() *ImportResults {
 	ir := NewImportResults()
 	var wg sync.WaitGroup
 	files := make(chan string, 10)
@@ -30,7 +29,7 @@ func readDir() ([]AssetImport, []Transaction, []int, []string) {
 	}
 	findFiles(files)
 	wg.Wait()
-	return ir.assets.list(), ir.fees, list(ir.years), list(ir.currencies)
+	return ir
 }
 
 // findFiles walks the current directory and looks for .csv files

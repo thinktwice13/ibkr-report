@@ -43,11 +43,11 @@ func xlsSheets() xlsSheetHandlers {
 // handleXlsDividends handles spreadsheet tracker dividend sheet lines
 func handleXlsDividends(lines []map[string]string, ir *ImportResults) {
 	for _, lm := range lines {
-		if lm["Year"] == "" {
+		if lm["yr"] == "" {
 			continue
 		}
 
-		yr := yearFromDate(lm["Year"])
+		yr := yearFromDate(lm["yr"])
 		symbols := symbolsFromCell(lm["Asset"])
 		if len(symbols) > 1 {
 			ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
@@ -85,11 +85,11 @@ func handleXlsTrades(lines []map[string]string, ir *ImportResults) {
 // TODO Consider merging with dividends sheet
 func handleXlsWithholdingTax(lines []map[string]string, ir *ImportResults) {
 	for _, lm := range lines {
-		if lm["Year"] == "" {
+		if lm["yr"] == "" {
 			continue
 		}
 
-		yr := yearFromDate(lm["Year"])
+		yr := yearFromDate(lm["yr"])
 		symbols := symbolsFromCell(lm["Asset"])
 		if len(symbols) > 1 {
 			ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
@@ -101,11 +101,11 @@ func handleXlsWithholdingTax(lines []map[string]string, ir *ImportResults) {
 // handleXlsFees handles spreadsheet tracker fees sheet lines
 func handleXlsFees(lines []map[string]string, ir *ImportResults) {
 	for _, lm := range lines {
-		if lm["Year"] == "" {
+		if lm["yr"] == "" {
 			continue
 		}
 
-		yr := yearFromDate(lm["Year"])
+		yr := yearFromDate(lm["yr"])
 		ir.AddFee(lm["Currency"], amountFromString(lm["Amount"]), yr)
 	}
 }
