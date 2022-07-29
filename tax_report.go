@@ -29,32 +29,31 @@ type TaxReport map[int]*TaxYear
 // taxReports builds a yearly tax report provided a list of summarized assets and portfolio fees
 // Returns a slice of tax years to be reported
 func taxReports(assets []Asset, fees []YearAmount, r TaxReport) TaxReport {
-	// Tax all assets' taxable sales profits and equity dividends
-	// Apply fees as a deductible from sales profits
 	for _, a := range assets {
 		for _, sum := range a.ByYear {
+			// Get or init a year for tax report
 			y := r.year(sum.Year)
 
-			// Profits
-			y.Pl += sum.Taxable
+			// If any tax withheld for an asset in a given year, report all but fees to foregin income report
+			// Otherwise, report all in JOPPD report
+			// Only report dividends for equity or when category not defined
+			// TODO Search category when empty
+			// Always report fees in JOPPD report
 			y.Fees += sum.Fees
-
-			// Dividends
-			// Only report dividends income for equity assets. Assume Equity (taxable) for empty category // TODO Search category when empty
-			// If asset has tax withheld in a given year, report all of the dividends and tax paid as foreign taxed income. Froup by country of origin
-			// Otherwise, report received dividends as capital gains
-			// TODO Check if profits should be reported in the same report ig any tax has been withheld
-			// TODO search info when category empty
-			if !(a.Category == "Equity" || a.Category == "") {
-				continue
-			}
-
 			if sum.WithholdingTax == 0 {
-				y.Dividends += sum.Dividends
+				y.Pl += sum.Taxable
+				if a.Category == "Equity" || a.Category == "" {
+					y.Dividends = sum.Dividends
+				}
 				continue
 			}
+			// With tax withheld
+			// TODO Check if dividends reported when tax taken
 			src := y.incomeSource(a.Domicile())
-			src.Received += sum.Dividends
+			src.Received += sum.Taxable
+			if a.Category == "Equity" || a.Category == "" {
+				src.Received += sum.Dividends
+			}
 			src.TaxPaid += sum.WithholdingTax
 		}
 	}
