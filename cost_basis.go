@@ -24,7 +24,7 @@ func (f *fifo) Buy(t Trade) {
 // Sell returns the cost basis fragments of the given quantity of shares
 func (f *fifo) Sell(qty float64) []Cost {
 	if qty > 0 {
-		panic("Sell quantity must be negative. Received:")
+		panic("Sell quantity must be negative")
 	}
 
 	if qty == 0 {

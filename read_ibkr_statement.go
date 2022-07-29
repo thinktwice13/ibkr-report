@@ -152,6 +152,9 @@ func handleDividendLine(lm map[string]string, ir *ImportResults) {
 
 // yearFromDate extracts a year from IBKR csv date field
 func yearFromDate(s string) int {
+	if s == "" {
+		return 1900
+	}
 	y, err := strconv.Atoi(s[:4])
 	if err != nil {
 		return 0

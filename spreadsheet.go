@@ -66,7 +66,7 @@ func RoundDec(v float64, places int) float64 {
 }
 
 func createXlsTemplate() {
-	filename := "Portfolio Tracker.xlsx"
+	filename := "Portfolio Tracker.example.xlsx"
 	path := filepath.Join(os.Getenv("PWD"), filename)
 
 	// Cancel if template file already exists

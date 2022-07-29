@@ -33,8 +33,8 @@ type xlsSheetHandlers map[string]sheetLineHandler
 // xlsSheets returns a map of handlers mapped by sheet (event type)
 func xlsSheets() xlsSheetHandlers {
 	return map[string]sheetLineHandler{
-		"Dividends":       handleXlsDividends,
 		"Trades":          handleXlsTrades,
+		"Dividends":       handleXlsDividends,
 		"Withholding Tax": handleXlsWithholdingTax,
 		"Fees":            handleXlsFees,
 	}
@@ -43,15 +43,13 @@ func xlsSheets() xlsSheetHandlers {
 // handleXlsDividends handles spreadsheet tracker dividend sheet lines
 func handleXlsDividends(lines []map[string]string, ir *ImportResults) {
 	for _, lm := range lines {
-		if lm["yr"] == "" {
+		if lm["Year"] == "" {
 			continue
 		}
 
-		yr := yearFromDate(lm["yr"])
+		yr := yearFromDate(lm["Year"])
 		symbols := symbolsFromCell(lm["Asset"])
-		if len(symbols) > 1 {
-			ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
-		}
+		ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
 		ir.AddDividend(symbols[0], lm["Currency"], yr, amountFromString(lm["Amount"]), false)
 	}
 }
@@ -64,9 +62,7 @@ func handleXlsTrades(lines []map[string]string, ir *ImportResults) {
 		}
 
 		symbols := symbolsFromCell(lm["Asset"])
-		if len(symbols) > 1 {
-			ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
-		}
+		ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
 		timeField := lm["Time"]
 		if timeField == "" {
 			continue
@@ -85,15 +81,13 @@ func handleXlsTrades(lines []map[string]string, ir *ImportResults) {
 // TODO Consider merging with dividends sheet
 func handleXlsWithholdingTax(lines []map[string]string, ir *ImportResults) {
 	for _, lm := range lines {
-		if lm["yr"] == "" {
+		if lm["Year"] == "" {
 			continue
 		}
 
-		yr := yearFromDate(lm["yr"])
+		yr := yearFromDate(lm["Year"])
 		symbols := symbolsFromCell(lm["Asset"])
-		if len(symbols) > 1 {
-			ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
-		}
+		ir.AddInstrumentInfo(symbols, importCategory(lm["Asset Category"]))
 		ir.AddDividend(symbols[0], lm["Currency"], yr, amountFromString(lm["Amount"]), true)
 	}
 }
@@ -101,11 +95,11 @@ func handleXlsWithholdingTax(lines []map[string]string, ir *ImportResults) {
 // handleXlsFees handles spreadsheet tracker fees sheet lines
 func handleXlsFees(lines []map[string]string, ir *ImportResults) {
 	for _, lm := range lines {
-		if lm["yr"] == "" {
+		if lm["Year"] == "" {
 			continue
 		}
 
-		yr := yearFromDate(lm["yr"])
+		yr := yearFromDate(lm["Year"])
 		ir.AddFee(lm["Currency"], amountFromString(lm["Amount"]), yr)
 	}
 }

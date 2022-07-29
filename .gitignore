@@ -17,10 +17,9 @@
 playground.txt
 *.csv
 *.xls*
+!Portfolio Tracker.example.xlsx
 tmp/
 dist/
 .dccache
-
-dist/
 
 dist/
