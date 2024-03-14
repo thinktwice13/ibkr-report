@@ -1,12 +1,21 @@
 package v2
 
 import (
+	"bufio"
+	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -28,12 +37,16 @@ type taxYear struct {
 	foreignIncome map[string]*foreign
 }
 
-type fileReport struct {
-	ID          int
-	trades      []trade
-	fixedIncome []any
-	tax         []any
-	fees        []any
+type tx struct {
+	isin, category, currency string
+	amount                   float64
+	year                     int
+}
+
+type brokerStatement struct {
+	trades                 []trade
+	fixedIncome, tax, fees []tx
+	ID                     int
 }
 
 type report map[int]*taxYear
@@ -67,6 +80,7 @@ type ledger struct {
 
 func Run() {
 	files, err := findFiles()
+	fmt.Println("Files found:", len(files))
 	if err != nil {
 		fmt.Println("Error finding files:", err)
 		return
@@ -84,6 +98,10 @@ type fxExchange struct {
 }
 
 func (fx *fxExchange) rate(currency string, year int) float64 {
+	if currency == baseCurrency {
+		return 1.0
+	}
+
 	key := fmt.Sprintf("%s%d", currency, year)
 	if rate, ok := fx.rates[key]; ok {
 		return rate
@@ -114,14 +132,19 @@ func findFiles() ([]string, error) {
 	return files, nil
 }
 
-func readFiles(files []string) <-chan fileReport {
-	out := make(chan fileReport, len(files))
+func readFiles(files []string) <-chan brokerStatement {
+	out := make(chan brokerStatement, len(files))
 	go func() {
 		for _, file := range files {
 			// read file
 			// transform data into a file report
-			fmt.Println("Reading file...", file)
-			out <- fileReport{ID: rand.Intn(100)}
+			bs, err := readIbkrStatement(file)
+			if err != nil {
+				fmt.Println("Error reading file:", err)
+				continue
+			}
+			bs.ID = rand.Intn(1000)
+			out <- *bs
 		}
 		close(out)
 	}()
@@ -142,32 +165,79 @@ type trade struct {
 	price float64
 }
 
-func fifo(ts []trade) []pl {
-	// Don't check is sorted, assume it is not as file
+func fifo(ts []trade, r rater) []pl {
+	// Don't check it is sorted, assume it is not. Trades come from file out of order
+	sort.Slice(ts, func(i, j int) bool {
+		return ts[i].time.Before(ts[j].time)
+	})
 
 	// FIFO
+	var pls []pl
+	purchase, sale := 0, 0
+	for sale < len(ts) {
+		// Find next sale. Must have some quantity left to fulfill
+		for sale < len(ts) && ts[sale].quantity == 0 {
+			sale++
+		}
 
-	// Reduce to taxable converted profits
+		if sale == len(ts) {
+			break
+		}
 
-	return []pl{}
+		// Find next purchase. Must have some quantity left to sell
+		for purchase < sale && ts[purchase].quantity == 0 {
+			purchase++
+		}
+
+		if purchase == sale {
+			break
+		}
+
+		pp := &ts[purchase]
+		ss := &ts[sale]
+		qtyToSell := math.Min(math.Abs(ss.quantity), math.Abs(pp.quantity))
+		ss.quantity += qtyToSell
+		pp.quantity -= qtyToSell
+
+		// Discard is not taxable (2 years hold)
+		if ss.time.After(pp.time.AddDate(2, 0, 0)) {
+			continue
+		}
+
+		// Convert both with the sale conversion year
+		pl := pl{
+			amount: qtyToSell * (r.rate(ss.currency, ss.time.Year()) - r.rate(pp.currency, ss.time.Year())),
+			year:   ss.time.Year(),
+			source: pp.isin[:2],
+		}
+
+		pls = append(pls, pl)
+	}
+
+	return pls
 }
 
-func newLedger(reports <-chan fileReport) *ledger {
+func newLedger(reports <-chan brokerStatement) *ledger {
 	// Store all in ledger to provide to tax report all at once
-	l := &ledger{}
+	l := &ledger{deductable: make(map[int]float64)}
 	fx := &fxExchange{rates: make(map[string]float64), m: &sync.RWMutex{}}
 
 	var trades []trade
 	for r := range reports {
-		fmt.Printf("Processing report %d\n", r.ID)
-		l.tax = append(l.tax, reportTax(r.tax, fx)...)
-		l.profits = append(l.profits, dividends(r.fixedIncome, fx)...)
-		l.deductable = deductable(r.trades, fx)
+		l.tax = append(l.tax, plsFromTxs(r.tax, fx)...)
+		l.profits = append(l.profits, plsFromTxs(r.fixedIncome, fx)...)
 		trades = append(trades, r.trades...)
+
+		for _, fee := range r.fees {
+			if _, ok := l.deductable[fee.year]; !ok {
+				l.deductable[fee.year] = 0
+			}
+			l.deductable[fee.year] += fx.rate(fee.currency, fee.year)
+		}
 	}
 
 	// We have all the trades. Calculate taxable realized profits
-	l.profits = append(l.profits, fifo(trades)...)
+	l.profits = append(l.profits, fifo(trades, fx)...)
 
 	return l
 }
@@ -176,20 +246,16 @@ type rater interface {
 	rate(currency string, year int) float64
 }
 
-func deductable(trades []trade, r rater) map[int]float64 {
-	return nil
-}
-
-func dividends(income []any, r rater) []pl {
-	return []pl{}
-}
-
-func reportTax(tax []any, r rater) []pl {
-	return []pl{}
-}
-
-func fees(fees []any, r rater) []pl {
-	return []pl{}
+func plsFromTxs(txs []tx, r rater) []pl {
+	pls := make([]pl, len(txs))
+	for _, tx := range txs {
+		p := pl{amount: tx.amount * r.rate(tx.currency, tx.year), year: tx.year}
+		if tx.isin != "" {
+			p.source = tx.isin[:2]
+		}
+		pls = append(pls, p)
+	}
+	return pls
 }
 
 func newReport(l *ledger) report {
@@ -229,7 +295,7 @@ func newReport(l *ledger) report {
 	// Balance it out. Do not report income if negative
 	// Remove year from report if no realized PL and no foreign income
 	for _, year := range r {
-		if year.realizedPL < 0 {
+		if year.realizedPL <= 0 {
 			year.realizedPL = 0
 
 			if len(year.foreignIncome) == 0 {
@@ -239,4 +305,285 @@ func newReport(l *ledger) report {
 	}
 
 	return r
+}
+
+type instrument struct {
+	isin     string
+	category string
+}
+
+// readIbkrStatement reads single csv IBKR file
+// Filters csv lines by relevant sections and uses *ImportResults to send files to
+func readIbkrStatement(filename string) (*brokerStatement, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		fmt.Printf("cannot open file %s %v", filename, err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(bufio.NewReader(file))
+	// Disable record length test in the CSV
+	reader.FieldsPerRecord = -1
+	// Allow quote in unquoted field
+	reader.LazyQuotes = true
+
+	// Not all csv lines are needed. Get new section handlers for each file
+	sections := []string{"Financial Instrument Information", "Trades", "Dividends", "Withholding Tax", "Fees"}
+	// header keeps the csv line used as a header for the section currently being read
+	var header []string
+	var rows []map[string]string
+	isins := make(map[string]instrument)
+	for {
+		row, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			continue
+		}
+
+		// Ignore if not a section we're interested in
+		if !slices.Contains(sections, row[0]) {
+			continue
+		}
+
+		// Update header if new section
+		if row[1] == "Header" {
+			header = row
+			continue
+		}
+
+		// If this is financial isin information, add symbols to isins map
+		// otherwise, map the line and store for later
+		if row[0] == "Financial Instrument Information" {
+			for _, s := range strings.Split(strings.ReplaceAll(row[1], " ", ""), ",") {
+				isins[s] = instrument{isin: formatISIN(row[2]), category: importCategory(row[3])}
+			}
+			continue
+		}
+
+		lm, err := mapIbkrLine(row, header)
+		if err != nil || lm["Header"] != "Data" {
+			continue
+		}
+
+		rows = append(rows, lm)
+	}
+
+	return bsFromRows(rows, isins)
+}
+
+func bsFromRows(rows []map[string]string, isins map[string]instrument) (*brokerStatement, error) {
+	bs := &brokerStatement{}
+
+	for _, row := range rows {
+		// All types have a currency
+		currency := row["Currency"]
+
+		section := row["Section"]
+		if section == "Trades" {
+			if row["Date/Time"] == "" || row["Asset Category"] == "Forex" || row["Symbol"] == "" {
+				continue
+			}
+
+			t, err := timeFromExact(row["Date/Time"])
+			if err != nil {
+				continue
+			}
+
+			bs.trades = append(bs.trades, trade{
+				isin:     isins[row["Symbol"]].isin,
+				category: isins[row["Symbol"]].category,
+				time:     *t,
+				currency: currency,
+				quantity: amountFromString(row["Quantity"]),
+				price:    amountFromString(row["T. Price"]),
+			})
+
+			bs.fees = append(bs.fees, tx{
+				category: isins[row["Symbol"]].category,
+				currency: currency,
+				amount:   amountFromString(row["Comm/Fee"]),
+				year:     t.Year(),
+			})
+
+			continue
+		}
+
+		// All other sections only need year as time
+		if row["Date"] == "" {
+			continue
+		}
+
+		if section == "Fees" {
+			bs.fees = append(bs.fees, tx{
+				currency: currency,
+				amount:   amountFromString(row["Amount"]),
+				year:     yearFromDate(row["Date"]),
+			})
+
+			continue
+		}
+
+		// Dividends and withholding tax have the same structure and need to get a symbol from the description
+		symbol, err := symbolFromDescription(row["Description"])
+		if err != nil {
+			continue
+		}
+
+		tx := tx{
+			isin:     isins[symbol].isin,
+			category: isins[symbol].category,
+			currency: currency,
+			amount:   amountFromString(row["Amount"]),
+			year:     yearFromDate(row["Date"]),
+		}
+
+		if section == "Dividends" {
+			bs.fixedIncome = append(bs.fixedIncome, tx)
+		} else {
+			bs.tax = append(bs.tax, tx)
+		}
+	}
+
+	return bs, nil
+}
+
+// symbolFromDescription extracts a symbol from IBKR csv dividend lines
+// TODO Check for ISINs
+func symbolFromDescription(d string) (string, error) {
+	if d == "" {
+		return "", errors.New("empty input")
+	}
+
+	// This is a dividend or withholding tax
+	parensIdx := strings.Index(d, "(")
+	if parensIdx == -1 {
+		return "", errors.New("cannot create asset event without symbol")
+	}
+
+	symbol := strings.ReplaceAll(d[:parensIdx], " ", "")
+	if symbol == "" {
+		return "", errors.New("cannot find symbol in description")
+	}
+	return symbol, nil
+}
+
+// yearFromDate extracts a year from IBKR csv date field
+func yearFromDate(s string) int {
+	if s == "" {
+		return 1900
+	}
+	y, err := strconv.Atoi(s[:4])
+	if err != nil {
+		return 0
+	}
+	return y
+}
+
+// amountFromString formats number strings to float64 type
+func amountFromString(s string) float64 {
+	if s == "" {
+		return 0
+
+	}
+	// Remove all but numbers, commas and points
+	re := regexp.MustCompile(`[0-9.,-]`)
+	ss := strings.Join(re.FindAllString(s, -1), "")
+	isNeg := ss[0] == '-'
+	// Find all commas and points
+	// If none found, return 0, print error
+	signs := regexp.MustCompile(`[.,]`).FindAllString(ss, -1)
+	if len(signs) == 0 {
+		f, err := strconv.ParseFloat(ss, 64)
+		if err != nil {
+			fmt.Printf("could not convert %s to number", s)
+			return 0
+		}
+
+		return f
+	}
+
+	// Use last sign as decimal separator and ignore others
+	// Find idx and replace whatever sign was to a decimal point
+	sign := signs[len(signs)-1]
+	signIdx := strings.LastIndex(ss, sign)
+	sign = "."
+	left := regexp.MustCompile(`[0-9]`).FindAllString(ss[:signIdx], -1)
+	right := ss[signIdx+1:]
+	n, err := strconv.ParseFloat(strings.Join(append(left, []string{sign, right}...), ""), 64)
+	if err != nil {
+		fmt.Printf("could not convert %s to number", s)
+		return 0
+	}
+	if isNeg {
+		n = n * -1
+	}
+	return n
+}
+
+// timeFromExact extracts time.Time from IBKR csv time field
+func timeFromExact(t string) (*time.Time, error) {
+	timeStr := strings.Join(strings.Split(t, ","), "")
+	tm, err := time.Parse("2006-01-02 15:04:05", timeStr)
+	if err != nil {
+		return nil, errors.New("could not parse time")
+	}
+
+	return &tm, nil
+}
+
+// mapIbkrLine uses a csv line and a related header line to construct a value to field map for easier field lookup while importing lines
+func mapIbkrLine(data, header []string) (map[string]string, error) {
+	if header == nil {
+		return nil, errors.New("cannot convert to row from empty header")
+	}
+
+	if data == nil {
+		return nil, errors.New("no data to map")
+	}
+
+	if len(header) != len(data) {
+		return nil, errors.New("header and line length mismatch")
+	}
+
+	lm := make(map[string]string, len(data))
+	for pos, field := range header {
+		lm[field] = data[pos]
+	}
+
+	lm["Section"] = data[0]
+
+	return lm, nil
+}
+
+// Adds "US" prefix to US security ISIN codes and removes the 12th check digit
+func formatISIN(sID string) string {
+	if sID == "" || len(sID) < 9 || len(sID) > 12 {
+		return sID // Not ISIN
+	}
+	if len(sID) < 11 {
+		// US ISIN number. Add country code
+		sID = "US" + sID
+	}
+	if len(sID) == 12 {
+		// Remove ISIN check digit
+		return sID[:11]
+	}
+
+	return sID
+}
+
+func importCategory(c string) string {
+	if c == "" {
+		return ""
+	}
+
+	lc := strings.ToLower(c)
+	if strings.HasPrefix(lc, "stock") || strings.HasPrefix(lc, "equit") {
+		return "Equity"
+	}
+
+	return c
 }
