@@ -31,6 +31,12 @@ func (fx *Exchange) Rate(currency string, year int) float64 {
 	}
 
 	key := fmt.Sprintf("%s%d", currency, year)
+	// Check for the requested rate. If not found, wait until existing fetches are done
+	// It is likely requested rate will be fetched by the ongoing lookup, so check again after waiting
+	// If still not found, fetch it
+	if rate, ok := fx.rates[key]; ok {
+		return rate
+	}
 	fx.wg.Wait()
 	if rate, ok := fx.rates[key]; ok {
 		return rate
@@ -88,6 +94,40 @@ func amountFromString(s string) float64 {
 	return n
 }
 
+// url composes the fx exchange rate url for a given currency and year
+// It accounts for the 2024 currency change and has a default set of currencies to get rates for, to avoid multiple fetches in common currencies
+func url(currency string, year int) string {
+	// Url base
+	url := strings.Builder{}
+	url.WriteString("https://api.hnb.hr/tecajn")
+	// Year-specific version
+	if year < 2023 {
+		url.WriteString("/v2")
+	} else {
+		url.WriteString("-eur/v3")
+	}
+	// Date
+	url.WriteString("?datum-primjene=")
+	if year == time.Now().Year() {
+		url.WriteString(time.Now().UTC().Format("2006-01-02"))
+	} else {
+		url.WriteString(strconv.Itoa(year) + "-12-31")
+	}
+	// Fetch for requested currencies plus a default set of common ones
+	currencyIncluded := false
+	for _, curr := range []string{"EUR", "USD", "GBP", "CHF", "CAD", "AUD", "JPY"} {
+		url.WriteString("&valuta=" + curr)
+		if curr == currency {
+			currencyIncluded = true
+		}
+	}
+	if !currencyIncluded {
+		url.WriteString("&valuta=" + currency)
+	}
+
+	return url.String()
+}
+
 func (fx *Exchange) grabRates(year int, currency string, wg *sync.WaitGroup) error {
 	if year <= 1900 {
 		return errors.New("invalid year")
@@ -96,36 +136,11 @@ func (fx *Exchange) grabRates(year int, currency string, wg *sync.WaitGroup) err
 	wg.Add(1)
 	defer wg.Done()
 
-	// Use last date of the year or today if year is current
-	date := time.Date(year, 12, 31, 0, 0, 0, 0, time.UTC)
-	if date.After(time.Now()) {
-		date = time.Now()
-	}
-
-	url := "https://api.hnb.hr/tecajn-eur/v3?datum-primjene=%s"
-	if year < 2023 {
-		url = "https://api.hnb.hr/tecajn/v2?datum-primjene=%s"
-	}
-
-	url = fmt.Sprintf(url, date.Format("2006-01-02"))
-	// Always fetch common currencies and add base currency if not found
-	currencies := []string{"EUR", "USD", "GBP", "CHF", "CAD", "AUD", "JPY"}
-	baseFound := false
-	for _, curr := range currencies {
-		url += "&valuta=" + curr
-		if curr == currency {
-			baseFound = true
-		}
-	}
-	if !baseFound {
-		url += "&valuta=" + currency
-	}
-
 	var resp ratesResponse
 	var err error
 	var response *http.Response
 	for r := 0; r < fx.grabRetries; r++ {
-		response, err = http.Get(url)
+		response, err = http.Get(url(currency, year))
 		if err == nil {
 			break
 		}
