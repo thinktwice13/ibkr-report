@@ -61,7 +61,7 @@ func (r report) print() {
 		if len(year.foreignIncome) > 0 {
 			fmt.Println("Foreign Income:")
 			for source, f := range year.foreignIncome {
-				fmt.Printf("  %s: %.2f\n", source, f.gains)
+				fmt.Printf("Received %.2f, paid %.2f at %s\n", f.gains, f.taxPaid, source)
 			}
 		}
 	}
@@ -171,64 +171,72 @@ func fifo(ts []trade, r rater) []pl {
 		return ts[i].time.Before(ts[j].time)
 	})
 
+	// group by ISIN
+	instrs := make(map[string][]trade)
+	for _, t := range ts {
+		instrs[t.isin] = append(instrs[t.isin], t)
+	}
+
 	// FIFO
 	var pls []pl
-	purchase, sale := 0, 0
-	for sale < len(ts) {
-		// Find next sale. Must have some quantity left to fulfill
-		for sale < len(ts) && ts[sale].quantity == 0 {
-			sale++
+	for _, ts := range instrs {
+		purchase, sale := 0, 0
+		for {
+			// find next sale
+			for sale < len(ts) && ts[sale].quantity >= 0 {
+				sale++
+			}
+
+			if sale == len(ts) {
+				break
+			}
+
+			// Find next purchase. Must have some quantity left to sell
+			for purchase < sale && ts[purchase].quantity <= 0 {
+				purchase++
+			}
+
+			if purchase == sale {
+				break
+			}
+
+			pp := &ts[purchase]
+			ss := &ts[sale]
+			qtyToSell := math.Min(math.Abs(ss.quantity), math.Abs(pp.quantity))
+			pp.quantity -= qtyToSell
+			ss.quantity += qtyToSell
+
+			// Discard is not taxable (2 years hold)
+			if ss.time.After(pp.time.AddDate(2, 0, 0)) {
+				continue
+			}
+
+			// Convert both currencies with the sale conversion year
+			pl := pl{
+				amount: qtyToSell * (ss.price*r.rate(ss.currency, ss.time.Year()) - pp.price*r.rate(pp.currency, ss.time.Year())),
+				year:   ss.time.Year(),
+				source: pp.isin[:2],
+			}
+
+			pls = append(pls, pl)
 		}
-
-		if sale == len(ts) {
-			break
-		}
-
-		// Find next purchase. Must have some quantity left to sell
-		for purchase < sale && ts[purchase].quantity == 0 {
-			purchase++
-		}
-
-		if purchase == sale {
-			break
-		}
-
-		pp := &ts[purchase]
-		ss := &ts[sale]
-		qtyToSell := math.Min(math.Abs(ss.quantity), math.Abs(pp.quantity))
-		ss.quantity += qtyToSell
-		pp.quantity -= qtyToSell
-
-		// Discard is not taxable (2 years hold)
-		if ss.time.After(pp.time.AddDate(2, 0, 0)) {
-			continue
-		}
-
-		// Convert both with the sale conversion year
-		pl := pl{
-			amount: qtyToSell * (r.rate(ss.currency, ss.time.Year()) - r.rate(pp.currency, ss.time.Year())),
-			year:   ss.time.Year(),
-			source: pp.isin[:2],
-		}
-
-		pls = append(pls, pl)
 	}
 
 	return pls
 }
 
-func newLedger(reports <-chan brokerStatement) *ledger {
+func newLedger(statements <-chan brokerStatement) *ledger {
 	// Store all in ledger to provide to tax report all at once
 	l := &ledger{deductable: make(map[int]float64)}
 	fx := &fxExchange{rates: make(map[string]float64), m: &sync.RWMutex{}}
 
 	var trades []trade
-	for r := range reports {
-		l.tax = append(l.tax, plsFromTxs(r.tax, fx)...)
-		l.profits = append(l.profits, plsFromTxs(r.fixedIncome, fx)...)
-		trades = append(trades, r.trades...)
+	for stmt := range statements {
+		l.tax = append(l.tax, plsFromTxs(stmt.tax, fx)...)
+		l.profits = append(l.profits, plsFromTxs(stmt.fixedIncome, fx)...)
+		trades = append(trades, stmt.trades...)
 
-		for _, fee := range r.fees {
+		for _, fee := range stmt.fees {
 			if _, ok := l.deductable[fee.year]; !ok {
 				l.deductable[fee.year] = 0
 			}
@@ -247,7 +255,8 @@ type rater interface {
 }
 
 func plsFromTxs(txs []tx, r rater) []pl {
-	pls := make([]pl, len(txs))
+	pls := make([]pl, 0, len(txs))
+
 	for _, tx := range txs {
 		p := pl{amount: tx.amount * r.rate(tx.currency, tx.year), year: tx.year}
 		if tx.isin != "" {
@@ -263,10 +272,12 @@ func newReport(l *ledger) report {
 
 	// Apply withholding tax
 	for _, pl := range l.tax {
+		// Add year to report if not present
 		if _, ok := r[pl.year]; !ok {
 			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign)}
 		}
 
+		// Add foreign income for the source
 		if _, ok := r[pl.year].foreignIncome[pl.source]; !ok {
 			r[pl.year].foreignIncome[pl.source] = &foreign{}
 		}
@@ -280,8 +291,13 @@ func newReport(l *ledger) report {
 			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign)}
 		}
 
-		// realized PL can be both positive and negative
-		r[pl.year].realizedPL += pl.amount
+		// If this is a positive gain and tax was already paid at source, add the gain to the foreign income
+		fi := r[pl.year].foreignIncome[pl.source]
+		if pl.amount > 0 && fi != nil && fi.taxPaid > 0 {
+			fi.gains += pl.amount
+		} else {
+			r[pl.year].realizedPL += pl.amount
+		}
 	}
 
 	// Deduct fees from main income report only
@@ -294,15 +310,15 @@ func newReport(l *ledger) report {
 
 	// Balance it out. Do not report income if negative
 	// Remove year from report if no realized PL and no foreign income
-	for _, year := range r {
-		if year.realizedPL <= 0 {
-			year.realizedPL = 0
-
-			if len(year.foreignIncome) == 0 {
-				delete(r, year.year)
-			}
-		}
-	}
+	//for _, year := range r {
+	//	if year.realizedPL <= 0 {
+	//		year.realizedPL = 0
+	//
+	//		if len(year.foreignIncome) == 0 {
+	//			delete(r, year.year)
+	//		}
+	//	}
+	//}
 
 	return r
 }
@@ -357,8 +373,12 @@ func readIbkrStatement(filename string) (*brokerStatement, error) {
 		// If this is financial isin information, add symbols to isins map
 		// otherwise, map the line and store for later
 		if row[0] == "Financial Instrument Information" {
-			for _, s := range strings.Split(strings.ReplaceAll(row[1], " ", ""), ",") {
-				isins[s] = instrument{isin: formatISIN(row[2]), category: importCategory(row[3])}
+			lm, err := mapIbkrLine(row, header)
+			if err != nil {
+				continue
+			}
+			for _, s := range strings.Split(strings.ReplaceAll(lm["Symbol"], " ", ""), ",") {
+				isins[s] = instrument{isin: formatISIN(lm["Security ID"]), category: importCategory(lm["Asset Category"])}
 			}
 			continue
 		}
