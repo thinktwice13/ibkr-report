@@ -3,38 +3,39 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	v2 "ibkr-report/v2"
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
-	"time"
 )
 
 var maxWorkers int
 
 func main() {
-	t := time.Now()
-	maxWorkers = runtime.NumCPU()
-	setPWD()
-	ir := readDir()
-	if len(ir.assets) == 0 {
-		log.Fatalf("No portfolio data found in %s\n", os.Getenv("PWD"))
-	}
+	//t := time.Now()
+	//maxWorkers = runtime.NumCPU()
+	//setPWD()
+	//ir := readDir()
+	//if len(ir.assets) == 0 {
+	//	log.Fatalf("No portfolio data found in %s\n", os.Getenv("PWD"))
+	//}
+	//
+	//rates := NewFxRates(list(ir.currencies), list(ir.years))
+	//tr := make(TaxReport, len(list(ir.years)))
+	//
+	//summaries := assetSummaries(ir.assets.list(), rates)
+	//// TODO Search prices
+	//taxReports(summaries, convFees(ir.fees, rates), tr)
+	//
+	//f := NewReport("Portfolio Report")
+	//summaries.WriteTo(f)
+	//tr.WriteTo(f)
+	//f.Save()
+	//
+	//createXlsTemplate()
+	//fmt.Println("Finished in", time.Since(t))
 
-	rates := NewFxRates(list(ir.currencies), list(ir.years))
-	tr := make(TaxReport, len(list(ir.years)))
-
-	summaries := assetSummaries(ir.assets.list(), rates)
-	// TODO Search prices
-	taxReports(summaries, convFees(ir.fees, rates), tr)
-
-	f := NewReport("Portfolio Report")
-	summaries.WriteTo(f)
-	tr.WriteTo(f)
-	f.Save()
-
-	createXlsTemplate()
-	fmt.Println("Finished in", time.Since(t))
+	v2.Run()
 }
 
 // setPWD sets the current working directory to the directory of the executable
