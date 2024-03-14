@@ -3,12 +3,14 @@ package v2
 import (
 	"bufio"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"ibkr-report/v2/fx"
 	"io"
+	"log"
 	"math"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -106,6 +109,35 @@ func Run() {
 	r.print()
 }
 
+type fxExchange struct {
+	grabRetries int
+	rates       map[string]float64
+	wg          *sync.WaitGroup
+}
+
+func (fx *fxExchange) rate(currency string, year int) float64 {
+	baseCurrency := "EUR"
+	if year < 2023 {
+		baseCurrency = "HRK"
+	}
+
+	if currency == baseCurrency {
+		return 1.0
+	}
+
+	key := fmt.Sprintf("%s%d", currency, year)
+	fx.wg.Wait()
+	if rate, ok := fx.rates[key]; ok {
+		return rate
+	}
+
+	if err := fx.grabRates(year, currency, fx.wg); err != nil {
+		log.Fatal(err)
+	}
+	fx.wg.Wait()
+	return fx.rates[key]
+}
+
 func findFiles() ([]string, error) {
 	var files []string
 	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
@@ -157,7 +189,7 @@ type trade struct {
 	price float64
 }
 
-func fifo(ts []trade, r fx.Rater) []pl {
+func fifo(ts []trade, r rater) []pl {
 	// Don't check it is sorted, assume it is not. Trades come from file out of order
 	sort.Slice(ts, func(i, j int) bool {
 		return ts[i].time.Before(ts[j].time)
@@ -205,7 +237,7 @@ func fifo(ts []trade, r fx.Rater) []pl {
 
 			// Convert both currencies with the sale conversion year
 			pl := pl{
-				amount: qtyToSell * (ss.price*r.Rate(ss.currency, ss.time.Year()) - pp.price*r.Rate(pp.currency, ss.time.Year())),
+				amount: qtyToSell * (ss.price*r.rate(ss.currency, ss.time.Year()) - pp.price*r.rate(pp.currency, ss.time.Year())),
 				year:   ss.time.Year(),
 				source: pp.isin[:2],
 			}
@@ -220,24 +252,24 @@ func fifo(ts []trade, r fx.Rater) []pl {
 func newLedger(statements <-chan brokerStatement) *ledger {
 	// Store all in ledger to provide to tax report all at once
 	l := &ledger{deductable: make(map[int]float64)}
-	rtr := fx.New()
+	fx := &fxExchange{rates: make(map[string]float64), grabRetries: 3, wg: new(sync.WaitGroup)}
 
 	var trades []trade
 	for stmt := range statements {
-		l.tax = append(l.tax, plsFromTxs(stmt.tax, rtr)...)
-		l.profits = append(l.profits, plsFromTxs(stmt.fixedIncome, rtr)...)
+		l.tax = append(l.tax, plsFromTxs(stmt.tax, fx)...)
+		l.profits = append(l.profits, plsFromTxs(stmt.fixedIncome, fx)...)
 		trades = append(trades, stmt.trades...)
 
 		for _, fee := range stmt.fees {
 			if _, ok := l.deductable[fee.year]; !ok {
 				l.deductable[fee.year] = 0
 			}
-			l.deductable[fee.year] += rtr.Rate(fee.currency, fee.year)
+			l.deductable[fee.year] += fx.rate(fee.currency, fee.year)
 		}
 	}
 
 	// We have all the trades. Calculate taxable realized profits
-	l.profits = append(l.profits, fifo(trades, rtr)...)
+	l.profits = append(l.profits, fifo(trades, fx)...)
 
 	return l
 }
@@ -246,11 +278,11 @@ type rater interface {
 	rate(currency string, year int) float64
 }
 
-func plsFromTxs(txs []tx, r fx.Rater) []pl {
+func plsFromTxs(txs []tx, r rater) []pl {
 	pls := make([]pl, 0, len(txs))
 
 	for _, tx := range txs {
-		p := pl{amount: tx.amount * r.Rate(tx.currency, tx.year), year: tx.year}
+		p := pl{amount: tx.amount * r.rate(tx.currency, tx.year), year: tx.year}
 		if tx.isin != "" {
 			p.source = tx.isin[:2]
 		}
@@ -605,4 +637,84 @@ func importCategory(c string) string {
 	}
 
 	return c
+}
+
+func (fx *fxExchange) grabRates(year int, currency string, wg *sync.WaitGroup) error {
+	if year <= 1900 {
+		return errors.New("invalid year")
+	}
+
+	wg.Add(1)
+	defer wg.Done()
+
+	// Use last date of the year or today if year is current
+	date := time.Date(year, 12, 31, 0, 0, 0, 0, time.UTC)
+	if date.After(time.Now()) {
+		date = time.Now()
+	}
+
+	url := "https://api.hnb.hr/tecajn-eur/v3?datum-primjene=%s"
+	if year < 2023 {
+		url = "https://api.hnb.hr/tecajn/v2?datum-primjene=%s"
+	}
+
+	url = fmt.Sprintf(url, date.Format("2006-01-02"))
+	// Always fetch common currencies and add base currency if not found
+	currencies := []string{"EUR", "USD", "GBP", "CHF", "CAD", "AUD", "JPY"}
+	baseFound := false
+	for _, curr := range currencies {
+		url += "&valuta=" + curr
+		if curr == currency {
+			baseFound = true
+		}
+	}
+	if !baseFound {
+		url += "&valuta=" + currency
+	}
+
+	var resp ratesResponse
+	var err error
+	var response *http.Response
+	for r := 0; r < fx.grabRetries; r++ {
+		response, err = http.Get(url)
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil {
+		return err
+	}
+
+	if response == nil {
+		return errors.New("no response")
+	}
+
+	defer response.Body.Close()
+	contents, err := io.ReadAll(response.Body)
+	if err != nil {
+		return errors.New("cannot read response")
+	}
+
+	err = json.Unmarshal(contents, &resp.Rates)
+	if err != nil {
+		fmt.Println("whoops:", err)
+	}
+
+	for _, r := range resp.Rates {
+		storeKey := fmt.Sprintf("%s%d", r.Currency, year)
+		fx.rates[storeKey] = amountFromString(r.Rate)
+	}
+
+	return nil
+}
+
+// rateResponse is the response from hnb.hr
+type rateResponse struct {
+	Currency string `json:"valuta"`
+	Rate     string `json:"srednji_tecaj"`
+}
+
+type ratesResponse struct {
+	Rates []rateResponse `json:"rates"`
 }
