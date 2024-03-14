@@ -3,11 +3,14 @@ package v2
 import (
 	"bufio"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/rand"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,10 +24,9 @@ import (
 )
 
 var (
-	workers      = runtime.NumCPU()
-	baseCurrency = "EUR"
-	taxRate      = 0.12
-	allowance    = 15.0
+	workers   = runtime.NumCPU()
+	taxRate   = 0.12
+	allowance = 15.0
 )
 
 type foreign struct {
@@ -33,6 +35,7 @@ type foreign struct {
 
 type taxYear struct {
 	year          int
+	currency      string
 	realizedPL    float64
 	foreignIncome map[string]*foreign
 }
@@ -93,25 +96,32 @@ func Run() {
 }
 
 type fxExchange struct {
-	m     *sync.RWMutex
-	rates map[string]float64
+	grabRetries int
+	rates       map[string]float64
+	wg          *sync.WaitGroup
 }
 
 func (fx *fxExchange) rate(currency string, year int) float64 {
+	baseCurrency := "EUR"
+	if year < 2023 {
+		baseCurrency = "HRK"
+	}
+
 	if currency == baseCurrency {
 		return 1.0
 	}
 
 	key := fmt.Sprintf("%s%d", currency, year)
+	fx.wg.Wait()
 	if rate, ok := fx.rates[key]; ok {
 		return rate
 	}
 
-	// TODO: fetch from API
-	fx.m.RLock()
-	defer fx.m.RUnlock()
-	fx.rates[key] = 1.0
-	return 1.0
+	if err := fx.grabRates(year, currency, fx.wg); err != nil {
+		log.Fatal(err)
+	}
+	fx.wg.Wait()
+	return fx.rates[key]
 }
 
 func findFiles() ([]string, error) {
@@ -228,7 +238,7 @@ func fifo(ts []trade, r rater) []pl {
 func newLedger(statements <-chan brokerStatement) *ledger {
 	// Store all in ledger to provide to tax report all at once
 	l := &ledger{deductable: make(map[int]float64)}
-	fx := &fxExchange{rates: make(map[string]float64), m: &sync.RWMutex{}}
+	fx := &fxExchange{rates: make(map[string]float64), grabRetries: 3, wg: new(sync.WaitGroup)}
 
 	var trades []trade
 	for stmt := range statements {
@@ -274,7 +284,11 @@ func newReport(l *ledger) report {
 	for _, pl := range l.tax {
 		// Add year to report if not present
 		if _, ok := r[pl.year]; !ok {
-			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign)}
+			ccy := "EUR"
+			if pl.year < 2023 {
+				ccy = "HRK"
+			}
+			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign), currency: ccy}
 		}
 
 		// Add foreign income for the source
@@ -285,13 +299,17 @@ func newReport(l *ledger) report {
 		r[pl.year].foreignIncome[pl.source].taxPaid += math.Abs(pl.amount)
 	}
 
-	// Apply profits
+	// Add profits and losses
 	for _, pl := range l.profits {
 		if _, ok := r[pl.year]; !ok {
-			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign)}
+			ccy := "EUR"
+			if pl.year < 2023 {
+				ccy = "HRK"
+			}
+			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign), currency: ccy}
 		}
 
-		// If this is a positive gain and tax was already paid at source, add the gain to the foreign income
+		// If this is a profit and tax was paid at source, add it to foreign income
 		fi := r[pl.year].foreignIncome[pl.source]
 		if pl.amount > 0 && fi != nil && fi.taxPaid > 0 {
 			fi.gains += pl.amount
@@ -301,7 +319,6 @@ func newReport(l *ledger) report {
 	}
 
 	// Deduct fees from main income report only
-	// Do not report a new year just for the fees
 	for yr, amount := range l.deductable {
 		if year, ok := r[yr]; ok {
 			year.realizedPL -= math.Abs(amount)
@@ -606,4 +623,84 @@ func importCategory(c string) string {
 	}
 
 	return c
+}
+
+func (fx *fxExchange) grabRates(year int, currency string, wg *sync.WaitGroup) error {
+	if year <= 1900 {
+		return errors.New("invalid year")
+	}
+
+	wg.Add(1)
+	defer wg.Done()
+
+	// Use last date of the year or today if year is current
+	date := time.Date(year, 12, 31, 0, 0, 0, 0, time.UTC)
+	if date.After(time.Now()) {
+		date = time.Now()
+	}
+
+	url := "https://api.hnb.hr/tecajn-eur/v3?datum-primjene=%s"
+	if year < 2023 {
+		url = "https://api.hnb.hr/tecajn/v2?datum-primjene=%s"
+	}
+
+	url = fmt.Sprintf(url, date.Format("2006-01-02"))
+	// Always fetch common currencies and add base currency if not found
+	currencies := []string{"EUR", "USD", "GBP", "CHF", "CAD", "AUD", "JPY"}
+	baseFound := false
+	for _, curr := range currencies {
+		url += "&valuta=" + curr
+		if curr == currency {
+			baseFound = true
+		}
+	}
+	if !baseFound {
+		url += "&valuta=" + currency
+	}
+
+	var resp ratesResponse
+	var err error
+	var response *http.Response
+	for r := 0; r < fx.grabRetries; r++ {
+		response, err = http.Get(url)
+		if err == nil {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+	if err != nil {
+		return err
+	}
+
+	if response == nil {
+		return errors.New("no response")
+	}
+
+	defer response.Body.Close()
+	contents, err := io.ReadAll(response.Body)
+	if err != nil {
+		return errors.New("cannot read response")
+	}
+
+	err = json.Unmarshal(contents, &resp.Rates)
+	if err != nil {
+		fmt.Println("whoops:", err)
+	}
+
+	for _, r := range resp.Rates {
+		storeKey := fmt.Sprintf("%s%d", r.Currency, year)
+		fx.rates[storeKey] = amountFromString(r.Rate)
+	}
+
+	return nil
+}
+
+// rateResponse is the response from hnb.hr
+type rateResponse struct {
+	Currency string `json:"valuta"`
+	Rate     string `json:"srednji_tecaj"`
+}
+
+type ratesResponse struct {
+	Rates []rateResponse `json:"rates"`
 }
