@@ -48,8 +48,7 @@ type Rater interface {
 	Rate(currency string, year int) float64
 }
 
-// amountFromString formats number strings to float64 type
-func amountFromString(s string) float64 {
+func amountFromStringOld(s string) float64 {
 	if s == "" {
 		return 0
 
@@ -87,6 +86,29 @@ func amountFromString(s string) float64 {
 		n = n * -1
 	}
 	return n
+}
+
+// amountFromString formats number strings to float64 type
+func amountFromString(s string) float64 {
+	if s == "" {
+		return 0
+	}
+
+	lastDec := strings.LastIndex(s, ".")
+	if lastDec != -1 {
+		s = strings.Replace(s, ".", "", strings.Count(s, ".")-1)
+	}
+
+	s = strings.ReplaceAll(s, ",", "")
+	s = strings.ReplaceAll(s, " ", "")
+
+	// Convert to float
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return f
 }
 
 // url composes the fx exchange rate url for a given currency and year
