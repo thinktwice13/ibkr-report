@@ -18,7 +18,7 @@ type Exchange struct {
 	// The HNB api is not the most reliable, so it is better to retry a few times
 	grabRetries int
 	// rates map a rate toa currency-year key (e.g. "EUR2023")
-	// This is all that's needed for Croatian tax report as the tha rate used is always Dev 31 of the requested year
+	// This is all that's needed for Croatian tax report as the tha rate used is always from Dec 31 of the requested year
 	rates map[string]float64
 }
 

@@ -219,7 +219,7 @@ func plFromTrades(purchase, sale *trade, r fx.Rater) (pl, bool) {
 		source: purchase.isin[:2],
 	}
 
-	return pl, sale.time.After(purchase.time.AddDate(2, 0, 0))
+	return pl, sale.time.Before(purchase.time.AddDate(2, 0, 0))
 }
 
 func newLedger(statements <-chan brokerStatement) *ledger {
@@ -262,7 +262,6 @@ func plsFromTxs(txs []tx, r fx.Rater) []pl {
 
 func newReport(l *ledger) report {
 	r := make(report)
-
 	r.withWitholdingTax(l.tax)
 	r.withProfits(l.profits)
 	r.withDeductibles(l.deductible)
