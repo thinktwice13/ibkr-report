@@ -13,13 +13,16 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
+// foreign is a representation of capital gains and tax paid from foreign source in a single year
 type foreign struct {
 	// gains is the total foreign income received
 	gains float64
@@ -71,21 +74,25 @@ type ledger struct {
 }
 
 func Run() {
+	t := time.Now()
+	defer func() {
+		fmt.Println("Finished in", time.Since(t))
+	}()
+
 	files, err := findFiles()
-	fmt.Println("Files found:", len(files))
 	if err != nil {
 		fmt.Println("Error finding files:", err)
 		return
 	}
 
-	reports := readFiles(files)
-	l := newLedger(reports)
+	l := newLedger(readFiles(files))
 	r := newReport(l)
-	if err := r.write(); err != nil {
+	if err := writeFile(r.toRows()); err != nil {
 		log.Fatalf("Error writing report: %v\n", err)
 	}
 }
 
+// findFiles looks for .csv files in the current directory tree, while avoiding duplicates
 func findFiles() ([]string, error) {
 	files := make(map[string]struct{})
 	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
@@ -108,20 +115,33 @@ func findFiles() ([]string, error) {
 	return list, nil
 }
 
+// readFiles creates a brokerStatement for each provided file
 func readFiles(files []string) <-chan brokerStatement {
 	out := make(chan brokerStatement, len(files))
-	go func() {
-		for _, file := range files {
-			// read file
-			// transform data into a file report
-			bs, err := readIbkrStatement(file)
-			if err != nil {
-				fmt.Println("Error reading file:", err)
-				continue
+
+	wg := &sync.WaitGroup{}
+	workers := int(runtime.NumCPU() / 2)
+	wg.Add(int(workers))
+	// worker pool
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			for _, file := range files {
+				// read file
+				// transform data into a file report
+				bs, err := readIbkrStatement(file)
+				if err != nil {
+					fmt.Println("Error reading file:", err)
+					continue
+				}
+				bs.ID = rand.Intn(1000)
+				out <- *bs
 			}
-			bs.ID = rand.Intn(1000)
-			out <- *bs
-		}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
 		close(out)
 	}()
 	return out
@@ -591,7 +611,7 @@ func importCategory(c string) string {
 	return c
 }
 
-func (r *report) write() error {
+func (r *report) toRows() [][]string {
 	data := make([][]string, 0, len(*r))
 	for _, year := range *r {
 		yr := strconv.Itoa(year.year)
@@ -617,9 +637,11 @@ func (r *report) write() error {
 		return data[i][0] < data[j][0]
 	})
 
-	// Include header
-	data = append([][]string{{"Godina", "Valuta", "Izvješće", "Dobit", "Izvor prihoda", "Plaćeni porez"}}, data...)
+	// With header
+	return append([][]string{{"Godina", "Valuta", "Izvješće", "Dobit", "Izvor prihoda", "Plaćeni porez"}}, data...)
+}
 
+func writeFile(data [][]string) error {
 	// Calculate column width
 	widths := make([]int, len(data[0]))
 	for _, row := range data {
@@ -651,4 +673,5 @@ func (r *report) write() error {
 	}
 
 	return w.Flush()
+
 }

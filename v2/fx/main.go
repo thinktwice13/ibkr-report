@@ -161,8 +161,7 @@ func (fx *Exchange) grabRates(year int, currency string, wg *sync.WaitGroup) (er
 	}
 
 	defer func() {
-		bErr := response.Body.Close()
-		if bErr != nil {
+		if bErr := response.Body.Close(); bErr != nil {
 			err = errors.Join(err, bErr)
 		}
 	}()
