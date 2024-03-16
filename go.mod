@@ -1,6 +1,6 @@
 module ibkr-report
 
-go 1.18
+go 1.22
 
 require github.com/xuri/excelize/v2 v2.6.0
 

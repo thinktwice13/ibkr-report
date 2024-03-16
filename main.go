@@ -34,8 +34,7 @@ func main() {
 		return
 	}
 
-	l := newLedger(readFiles(files))
-	r := newReport(l)
+	r := newReport(newLedger(readFiles(files)))
 	if err := writeFile(r.toRows()); err != nil {
 		log.Fatalf("Error writing report: %v\n", err)
 	}
@@ -162,20 +161,9 @@ type trade struct {
 }
 
 func fifo(ts []trade, r fx.Rater) []pl {
-	// Don't check it is sorted, assume it is not. Trades come from file out of order
-	sort.Slice(ts, func(i, j int) bool {
-		return ts[i].time.Before(ts[j].time)
-	})
-
-	// group by ISIN
-	instrs := make(map[string][]trade)
-	for _, t := range ts {
-		instrs[t.isin] = append(instrs[t.isin], t)
-	}
-
 	// FIFO
 	var pls []pl
-	for _, ts := range instrs {
+	for _, ts := range tradesByISIN(ts) {
 		purchase, sale := 0, 0
 		for {
 			// find next sale
@@ -196,29 +184,42 @@ func fifo(ts []trade, r fx.Rater) []pl {
 				break
 			}
 
-			pp := &ts[purchase]
-			ss := &ts[sale]
-			qtyToSell := math.Min(math.Abs(ss.quantity), math.Abs(pp.quantity))
-			pp.quantity -= qtyToSell
-			ss.quantity += qtyToSell
-
-			// Discard is not taxable (2 years hold)
-			if ss.time.After(pp.time.AddDate(2, 0, 0)) {
-				continue
+			if pl, taxable := plFromTrades(&ts[purchase], &ts[sale], r); taxable {
+				pls = append(pls, pl)
 			}
-
-			// Convert both currencies with the sale conversion year
-			pl := pl{
-				amount: qtyToSell * (ss.price*r.Rate(ss.currency, ss.time.Year()) - pp.price*r.Rate(pp.currency, ss.time.Year())),
-				year:   ss.time.Year(),
-				source: pp.isin[:2],
-			}
-
-			pls = append(pls, pl)
 		}
 	}
 
 	return pls
+}
+
+func tradesByISIN(ts []trade) map[string][]trade {
+	sort.Slice(ts, func(i, j int) bool {
+		return ts[i].time.Before(ts[j].time)
+	})
+
+	grouped := make(map[string][]trade)
+	for _, t := range ts {
+		grouped[t.isin] = append(grouped[t.isin], t)
+	}
+
+	return grouped
+}
+
+// plFromTrades, returns the pl from a single purchase and sale trade, as well as a bool indicating if the trade was taxable
+func plFromTrades(purchase, sale *trade, r fx.Rater) (pl, bool) {
+	qtyToSell := math.Min(math.Abs(sale.quantity), math.Abs(purchase.quantity))
+	purchase.quantity -= qtyToSell
+	sale.quantity += qtyToSell
+
+	// Convert both currencies with the sale conversion year
+	pl := pl{
+		amount: qtyToSell * (sale.price*r.Rate(sale.currency, sale.time.Year()) - purchase.price*r.Rate(purchase.currency, sale.time.Year())),
+		year:   sale.time.Year(),
+		source: purchase.isin[:2],
+	}
+
+	return pl, sale.time.After(purchase.time.AddDate(2, 0, 0))
 }
 
 func newLedger(statements <-chan brokerStatement) *ledger {
@@ -262,63 +263,9 @@ func plsFromTxs(txs []tx, r fx.Rater) []pl {
 func newReport(l *ledger) report {
 	r := make(report)
 
-	// Apply withholding tax
-	for _, pl := range l.tax {
-		// Add year to report if not present
-		if _, ok := r[pl.year]; !ok {
-			ccy := "EUR"
-			if pl.year < 2023 {
-				ccy = "HRK"
-			}
-			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign), currency: ccy}
-		}
-
-		// Add foreign income for the source
-		if _, ok := r[pl.year].foreignIncome[pl.source]; !ok {
-			r[pl.year].foreignIncome[pl.source] = &foreign{}
-		}
-
-		r[pl.year].foreignIncome[pl.source].taxPaid += math.Abs(pl.amount)
-	}
-
-	// Add profits and losses
-	for _, pl := range l.profits {
-		if _, ok := r[pl.year]; !ok {
-			ccy := "EUR"
-			if pl.year < 2023 {
-				ccy = "HRK"
-			}
-			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign), currency: ccy}
-		}
-
-		// If this is a profit and tax was paid at source, add it to foreign income
-		fi := r[pl.year].foreignIncome[pl.source]
-		if pl.amount > 0 && fi != nil && fi.taxPaid > 0 {
-			fi.gains += pl.amount
-		} else {
-			r[pl.year].realizedPL += pl.amount
-		}
-	}
-
-	// Deduct fees from main income report only
-	for yr, amount := range l.deductible {
-		if year, ok := r[yr]; ok {
-			year.realizedPL -= math.Abs(amount)
-		}
-	}
-
-	// Balance it out. Do not report income if negative
-	// Remove year from report if no realized PL and no foreign income
-	//for _, year := range r {
-	//	if year.realizedPL <= 0 {
-	//		year.realizedPL = 0
-	//
-	//		if len(year.foreignIncome) == 0 {
-	//			delete(r, year.year)
-	//		}
-	//	}
-	//}
-
+	r.withWitholdingTax(l.tax)
+	r.withProfits(l.profits)
+	r.withDeductibles(l.deductible)
 	return r
 }
 
@@ -327,76 +274,85 @@ type instrument struct {
 	category string
 }
 
+type reader struct {
+	header []string
+	rows   []map[string]string
+	isins  map[string]instrument
+}
+
+func (r *reader) read(row []string) {
+	sections := []string{"Financial Instrument Information", "Trades", "Dividends", "Withholding Tax", "Fees"}
+	// Ignore if not a section we're interested in
+	if !slices.Contains(sections, row[0]) {
+		return
+	}
+
+	// Update header if new section
+	if row[1] == "Header" {
+		r.header = row
+		return
+	}
+
+	// If this is financial isin information, add symbols to isins map
+	// otherwise, map the line and store for later
+	if row[0] == "Financial Instrument Information" {
+		lm, err := mapIbkrLine(row, r.header)
+		if err != nil {
+			return
+		}
+		for _, s := range strings.Split(strings.ReplaceAll(lm["Symbol"], " ", ""), ",") {
+			r.isins[s] = instrument{isin: formatISIN(lm["Security ID"]), category: importCategory(lm["Asset Category"])}
+		}
+		return
+	}
+
+	lm, err := mapIbkrLine(row, r.header)
+	if err != nil || lm["Header"] != "Data" {
+		return
+	}
+
+	r.rows = append(r.rows, lm)
+
+}
+
 // readIbkrStatement reads single csv IBKR file
 // Filters csv lines by relevant sections and uses *ImportResults to send files to
-func readIbkrStatement(filename string) (*brokerStatement, error) {
+func readIbkrStatement(filename string) (stmt *brokerStatement, err error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("cannot open file %s %v", filename, err)
 	}
-	defer file.Close()
+	defer func() {
+		if fErr := file.Close(); fErr != nil {
+			err = errors.Join(err, fErr)
+		}
+	}()
 
-	reader := csv.NewReader(bufio.NewReader(file))
+	csvRdr := csv.NewReader(bufio.NewReader(file))
 	// Disable record length test in the CSV
-	reader.FieldsPerRecord = -1
+	csvRdr.FieldsPerRecord = -1
 	// Allow quote in unquoted field
-	reader.LazyQuotes = true
+	csvRdr.LazyQuotes = true
 
-	// Not all csv lines are needed. Get new section handlers for each file
-	sections := []string{"Financial Instrument Information", "Trades", "Dividends", "Withholding Tax", "Fees"}
-	// header keeps the csv line used as a header for the section currently being read
-	var header []string
-	var rows []map[string]string
-	isins := make(map[string]instrument)
+	rdr := reader{isins: make(map[string]instrument)}
 	for {
-		row, err := reader.Read()
+		row, err := csvRdr.Read()
 		if err == io.EOF {
 			break
 		}
-
 		if err != nil {
 			continue
 		}
 
-		// Ignore if not a section we're interested in
-		if !slices.Contains(sections, row[0]) {
-			continue
-		}
-
-		// Update header if new section
-		if row[1] == "Header" {
-			header = row
-			continue
-		}
-
-		// If this is financial isin information, add symbols to isins map
-		// otherwise, map the line and store for later
-		if row[0] == "Financial Instrument Information" {
-			lm, err := mapIbkrLine(row, header)
-			if err != nil {
-				continue
-			}
-			for _, s := range strings.Split(strings.ReplaceAll(lm["Symbol"], " ", ""), ",") {
-				isins[s] = instrument{isin: formatISIN(lm["Security ID"]), category: importCategory(lm["Asset Category"])}
-			}
-			continue
-		}
-
-		lm, err := mapIbkrLine(row, header)
-		if err != nil || lm["Header"] != "Data" {
-			continue
-		}
-
-		rows = append(rows, lm)
+		rdr.read(row)
 	}
 
-	return bsFromRows(rows, isins)
+	return rdr.statement()
 }
 
-func bsFromRows(rows []map[string]string, isins map[string]instrument) (*brokerStatement, error) {
+func (r *reader) statement() (*brokerStatement, error) {
 	bs := &brokerStatement{}
-
-	for _, row := range rows {
+	for _, row := range r.rows {
 		// All types have a currency
 		currency := row["Currency"]
 
@@ -412,8 +368,8 @@ func bsFromRows(rows []map[string]string, isins map[string]instrument) (*brokerS
 			}
 
 			bs.trades = append(bs.trades, trade{
-				isin:     isins[row["Symbol"]].isin,
-				category: isins[row["Symbol"]].category,
+				isin:     r.isins[row["Symbol"]].isin,
+				category: r.isins[row["Symbol"]].category,
 				time:     *t,
 				currency: currency,
 				quantity: amountFromString(row["Quantity"]),
@@ -421,7 +377,7 @@ func bsFromRows(rows []map[string]string, isins map[string]instrument) (*brokerS
 			})
 
 			bs.fees = append(bs.fees, tx{
-				category: isins[row["Symbol"]].category,
+				category: r.isins[row["Symbol"]].category,
 				currency: currency,
 				amount:   amountFromString(row["Comm/Fee"]),
 				year:     t.Year(),
@@ -452,8 +408,8 @@ func bsFromRows(rows []map[string]string, isins map[string]instrument) (*brokerS
 		}
 
 		tx := tx{
-			isin:     isins[symbol].isin,
-			category: isins[symbol].category,
+			isin:     r.isins[symbol].isin,
+			category: r.isins[symbol].category,
 			currency: currency,
 			amount:   amountFromString(row["Amount"]),
 			year:     yearFromDate(row["Date"]),
@@ -607,9 +563,9 @@ func importCategory(c string) string {
 	return c
 }
 
-func (r *report) toRows() [][]string {
-	data := make([][]string, 0, len(*r))
-	for _, year := range *r {
+func (r report) toRows() [][]string {
+	data := make([][]string, 0, len(r))
+	for _, year := range r {
 		yr := strconv.Itoa(year.year)
 		ccy := "EUR"
 		if year.year < 2023 {
@@ -637,24 +593,80 @@ func (r *report) toRows() [][]string {
 	return append([][]string{{"Godina", "Valuta", "Izvješće", "Dobit", "Izvor prihoda", "Plaćeni porez"}}, data...)
 }
 
-func writeFile(data [][]string) error {
-	// Calculate column width
-	widths := make([]int, len(data[0]))
-	for _, row := range data {
-		for i, cell := range row {
-			if len(cell) > widths[i] {
-				widths[i] = len(cell)
+func (r report) withWitholdingTax(tax []pl) {
+	for _, pl := range tax {
+		// Add year to report if not present
+		if _, ok := r[pl.year]; !ok {
+			ccy := "EUR"
+			if pl.year < 2023 {
+				ccy = "HRK"
+			}
+			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign), currency: ccy}
+		}
+
+		// Add foreign income for the source
+		if _, ok := r[pl.year].foreignIncome[pl.source]; !ok {
+			r[pl.year].foreignIncome[pl.source] = &foreign{}
+		}
+
+		r[pl.year].foreignIncome[pl.source].taxPaid += math.Abs(pl.amount)
+	}
+}
+
+func (r report) withProfits(profits []pl) {
+	for _, pl := range profits {
+		if _, ok := r[pl.year]; !ok {
+			ccy := "EUR"
+			if pl.year < 2023 {
+				ccy = "HRK"
+			}
+			r[pl.year] = &taxYear{year: pl.year, foreignIncome: make(map[string]*foreign), currency: ccy}
+		}
+
+		// If this is a profit and tax was paid at source, add it to foreign income
+		fi := r[pl.year].foreignIncome[pl.source]
+		if pl.amount > 0 && fi != nil && fi.taxPaid > 0 {
+			fi.gains += pl.amount
+		} else {
+			r[pl.year].realizedPL += pl.amount
+		}
+	}
+}
+
+func (r report) withDeductibles(deductible map[int]float64) {
+	for yr, amount := range deductible {
+		if year, ok := r[yr]; ok {
+			year.realizedPL -= math.Abs(amount)
+		}
+	}
+
+	// Balance it out. Do not report income if negative
+	// Remove year from report if no realized PL and no foreign income
+	for _, year := range r {
+		if year.realizedPL <= 0 {
+			year.realizedPL = 0
+
+			if len(year.foreignIncome) == 0 {
+				delete(r, year.year)
 			}
 		}
 	}
+}
+
+func writeFile(data [][]string) (err error) {
+	// Calculate column widths
+	widths := colWidths(data)
 
 	// Print tab-separated to file
 	file, err := os.Create("report.txt")
 	if err != nil {
-		return err
+		return
 	}
-
-	defer file.Close()
+	defer func() {
+		if fErr := file.Close(); fErr != nil {
+			err = errors.Join(err, fErr)
+		}
+	}()
 
 	w := bufio.NewWriter(file)
 	for _, row := range data {
@@ -663,11 +675,23 @@ func writeFile(data [][]string) error {
 				return err
 			}
 		}
-		if err := w.WriteByte('\n'); err != nil {
-			return err
+		if err = w.WriteByte('\n'); err != nil {
+			return
 		}
 	}
 
-	return w.Flush()
+	err = w.Flush()
+	return
+}
 
+func colWidths(data [][]string) []int {
+	widths := make([]int, len(data[0]))
+	for _, row := range data {
+		for i, cell := range row {
+			if len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+	return widths
 }
