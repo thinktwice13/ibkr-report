@@ -87,21 +87,25 @@ func Run() {
 }
 
 func findFiles() ([]string, error) {
-	var files []string
+	files := make(map[string]struct{})
 	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
-		// Only consider .csv files
-		if filepath.Ext(path) == ".csv" {
-			files = append(files, path)
+		if filepath.Ext(path) != ".csv" {
+			return nil
 		}
-
+		if _, ok := files[path]; !ok {
+			files[path] = struct{}{}
+		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
 
-	return files, nil
+	var list []string
+	for k := range files {
+		list = append(list, k)
+	}
+	return list, nil
 }
 
 func readFiles(files []string) <-chan brokerStatement {
