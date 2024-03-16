@@ -67,7 +67,7 @@ type pl struct {
 
 type ledger struct {
 	tax, profits []pl
-	deductable   map[int]float64
+	deductible   map[int]float64
 }
 
 func Run() {
@@ -203,7 +203,7 @@ func fifo(ts []trade, r fx.Rater) []pl {
 
 func newLedger(statements <-chan brokerStatement) *ledger {
 	// Store all in ledger to provide to tax report all at once
-	l := &ledger{deductable: make(map[int]float64)}
+	l := &ledger{deductible: make(map[int]float64)}
 	rtr := fx.New()
 
 	var trades []trade
@@ -213,10 +213,10 @@ func newLedger(statements <-chan brokerStatement) *ledger {
 		trades = append(trades, stmt.trades...)
 
 		for _, fee := range stmt.fees {
-			if _, ok := l.deductable[fee.year]; !ok {
-				l.deductable[fee.year] = 0
+			if _, ok := l.deductible[fee.year]; !ok {
+				l.deductible[fee.year] = 0
 			}
-			l.deductable[fee.year] += rtr.Rate(fee.currency, fee.year)
+			l.deductible[fee.year] += rtr.Rate(fee.currency, fee.year)
 		}
 	}
 
@@ -285,7 +285,7 @@ func newReport(l *ledger) report {
 	}
 
 	// Deduct fees from main income report only
-	for yr, amount := range l.deductable {
+	for yr, amount := range l.deductible {
 		if year, ok := r[yr]; ok {
 			year.realizedPL -= math.Abs(amount)
 		}
