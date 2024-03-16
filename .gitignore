@@ -23,3 +23,5 @@ dist/
 .dccache
 
 dist/
+
+report.txt

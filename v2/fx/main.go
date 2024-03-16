@@ -15,9 +15,15 @@ import (
 )
 
 type Exchange struct {
+	// grabRetries is the number of times to retry fetching the rates
+	// The HNB api is not the most reliable, so it is better to retry a few times
 	grabRetries int
-	rates       map[string]float64
-	wg          *sync.WaitGroup
+	// rates map a rate toa currency-year key (e.g. "EUR2023")
+	// This is all that's needed for Croatian tax report as the tha rate used is always Dev 31 of the requested year
+	rates map[string]float64
+	// wg allows waiting for running fetches before returning the requested rate
+	// It is likely many equal requests will be made in a short time, so it is better to wait for the first fetch to finish
+	wg *sync.WaitGroup
 }
 
 func (fx *Exchange) Rate(currency string, year int) float64 {
@@ -34,6 +40,7 @@ func (fx *Exchange) Rate(currency string, year int) float64 {
 	// Check for the requested rate. If not found, wait until existing fetches are done
 	// It is likely requested rate will be fetched by the ongoing lookup, so check again after waiting
 	// If still not found, fetch it
+	// TODO Maintain waitGroup counter to avoid having to check for rates again
 	if rate, ok := fx.rates[key]; ok {
 		return rate
 	}
@@ -128,7 +135,7 @@ func url(currency string, year int) string {
 	return url.String()
 }
 
-func (fx *Exchange) grabRates(year int, currency string, wg *sync.WaitGroup) error {
+func (fx *Exchange) grabRates(year int, currency string, wg *sync.WaitGroup) (err error) {
 	if year <= 1900 {
 		return errors.New("invalid year")
 	}
@@ -136,8 +143,7 @@ func (fx *Exchange) grabRates(year int, currency string, wg *sync.WaitGroup) err
 	wg.Add(1)
 	defer wg.Done()
 
-	var resp ratesResponse
-	var err error
+	var resp hnbApiResponse
 	var response *http.Response
 	for r := 0; r < fx.grabRetries; r++ {
 		response, err = http.Get(url(currency, year))
@@ -147,22 +153,27 @@ func (fx *Exchange) grabRates(year int, currency string, wg *sync.WaitGroup) err
 		time.Sleep(time.Second)
 	}
 	if err != nil {
-		return err
+		return
 	}
 
 	if response == nil {
 		return errors.New("no response")
 	}
 
-	defer response.Body.Close()
+	defer func() {
+		bErr := response.Body.Close()
+		if bErr != nil {
+			err = errors.Join(err, bErr)
+		}
+	}()
 	contents, err := io.ReadAll(response.Body)
 	if err != nil {
-		return errors.New("cannot read response")
+		return errors.New("error reading HNB api response")
 	}
 
 	err = json.Unmarshal(contents, &resp.Rates)
 	if err != nil {
-		fmt.Println("whoops:", err)
+		return
 	}
 
 	for _, r := range resp.Rates {
@@ -170,17 +181,14 @@ func (fx *Exchange) grabRates(year int, currency string, wg *sync.WaitGroup) err
 		fx.rates[storeKey] = amountFromString(r.Rate)
 	}
 
-	return nil
+	return
 }
 
-// rateResponse is the response from hnb.hr
-type rateResponse struct {
-	Currency string `json:"valuta"`
-	Rate     string `json:"srednji_tecaj"`
-}
-
-type ratesResponse struct {
-	Rates []rateResponse `json:"rates"`
+type hnbApiResponse struct {
+	Rates []struct {
+		Currency string `json:"valuta"`
+		Rate     string `json:"srednji_tecaj"`
+	} `json:"rates"`
 }
 
 func New() *Exchange {

@@ -7,23 +7,17 @@ import (
 	"fmt"
 	"ibkr-report/v2/fx"
 	"io"
+	"log"
 	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-)
-
-var (
-	workers   = runtime.NumCPU()
-	taxRate   = 0.12
-	allowance = 15.0
 )
 
 type foreign struct {
@@ -65,22 +59,6 @@ type brokerStatement struct {
 
 type report map[int]*taxYear
 
-func (r report) print() {
-	for _, year := range r {
-		fmt.Printf("Year: %d\n", year.year)
-		fmt.Printf("Realized P/L: %.2f\n", year.realizedPL)
-		tax := math.Max(0, year.realizedPL-allowance) * taxRate
-		fmt.Printf("Tax: %.2f\n", tax)
-
-		if len(year.foreignIncome) > 0 {
-			fmt.Println("Foreign Income:")
-			for source, f := range year.foreignIncome {
-				fmt.Printf("Received %.2f, paid %.2f at %s\n", f.gains, f.taxPaid, source)
-			}
-		}
-	}
-}
-
 type pl struct {
 	amount float64
 	source string
@@ -103,7 +81,9 @@ func Run() {
 	reports := readFiles(files)
 	l := newLedger(reports)
 	r := newReport(l)
-	r.print()
+	if err := r.write(); err != nil {
+		log.Fatalf("Error writing report: %v\n", err)
+	}
 }
 
 func findFiles() ([]string, error) {
@@ -605,4 +585,66 @@ func importCategory(c string) string {
 	}
 
 	return c
+}
+
+func (r *report) write() error {
+	data := make([][]string, 0, len(*r))
+	for _, year := range *r {
+		yr := strconv.Itoa(year.year)
+		ccy := "EUR"
+		if year.year < 2023 {
+			ccy = "HRK"
+		}
+		data = append(data, []string{yr, ccy, "JOPPD", fmt.Sprintf("%.2f", math.Max(0, year.realizedPL)), "", ""})
+		for source, f := range year.foreignIncome {
+			data = append(data, []string{yr, ccy, "INO-DOH", fmt.Sprintf("%.2f", f.gains), source, fmt.Sprintf("%.2f", f.taxPaid)})
+		}
+	}
+
+	// sort by year, then report type, then source
+	// JOPPD before INO-DOH
+	sort.Slice(data, func(i, j int) bool {
+		if data[i][0] == data[j][0] {
+			if data[i][1] == data[j][1] {
+				return data[i][4] < data[j][4]
+			}
+			return data[i][1] > data[j][1]
+		}
+		return data[i][0] < data[j][0]
+	})
+
+	// Include header
+	data = append([][]string{{"Godina", "Valuta", "Izvješće", "Dobit", "Izvor prihoda", "Plaćeni porez"}}, data...)
+
+	// Calculate column width
+	widths := make([]int, len(data[0]))
+	for _, row := range data {
+		for i, cell := range row {
+			if len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+
+	// Print tab-separated to file
+	file, err := os.Create("report.txt")
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+
+	w := bufio.NewWriter(file)
+	for _, row := range data {
+		for i, cell := range row {
+			if _, err := fmt.Fprintf(w, "%-*s", widths[i]+2, cell); err != nil {
+				return err
+			}
+		}
+		if err := w.WriteByte('\n'); err != nil {
+			return err
+		}
+	}
+
+	return w.Flush()
 }
