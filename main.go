@@ -59,6 +59,9 @@ type pl struct {
 	year   int
 }
 
+// ledger collects all broker data into a single structure to be reported on.
+// it groups profits and losses, discards non-taxable profits and calculates deductible expenses. It also runs a FIFO strategy on trades to calculate taxable trading profits
+// TODO ledger should not be concerned with the filtering and FIFO strategy. It should only collect data and let another component handle it
 type ledger struct {
 	tax, profits []pl
 	deductible   map[int]float64
@@ -121,7 +124,6 @@ func readFiles(files <-chan string) <-chan *broker.Statement {
 }
 
 func fifo(ts []broker.Trade, r fx.Rater) []pl {
-	// FIFO
 	var pls []pl
 	for _, ts := range tradesByISIN(ts) {
 		purchase, sale := 0, 0
@@ -144,7 +146,7 @@ func fifo(ts []broker.Trade, r fx.Rater) []pl {
 				break
 			}
 
-			if pl, taxable := plFromTrades(&ts[purchase], &ts[sale], r); taxable {
+			if pl, taxable := profitsFromTrades(&ts[purchase], &ts[sale], r); taxable {
 				pls = append(pls, pl)
 			}
 		}
@@ -153,26 +155,25 @@ func fifo(ts []broker.Trade, r fx.Rater) []pl {
 	return pls
 }
 
+// tradesByISIN groups Trades by ISIN, for FIFO strategy to be run separately for each instrument
 func tradesByISIN(ts []broker.Trade) map[string][]broker.Trade {
 	sort.Slice(ts, func(i, j int) bool {
 		return ts[i].Time.Before(ts[j].Time)
 	})
-
 	grouped := make(map[string][]broker.Trade)
 	for _, t := range ts {
 		grouped[t.ISIN] = append(grouped[t.ISIN], t)
 	}
-
 	return grouped
 }
 
-// plFromTrades, returns the pl from a single purchase and sale Trade, as well as a bool indicating if the Trade was taxable
-func plFromTrades(purchase, sale *broker.Trade, r fx.Rater) (pl, bool) {
+// profitsFromTrades, returns the pl from a single purchase and sale Trade, as well as a bool indicating if the Trade was taxable
+func profitsFromTrades(purchase, sale *broker.Trade, r fx.Rater) (pl, bool) {
 	qtyToSell := math.Min(math.Abs(sale.Quantity), math.Abs(purchase.Quantity))
 	purchase.Quantity -= qtyToSell
 	sale.Quantity += qtyToSell
 
-	// Convert both currencies with the sale conversion Year
+	// Convert both currencies using the exchange rate of the year of the sale
 	pl := pl{
 		amount: qtyToSell * (sale.Price*r.Rate(sale.Currency, sale.Time.Year()) - purchase.Price*r.Rate(purchase.Currency, sale.Time.Year())),
 		year:   sale.Time.Year(),
@@ -186,13 +187,11 @@ func newLedger(statements <-chan *broker.Statement) *ledger {
 	// Store all in ledger to provide to Tax report all at once
 	l := &ledger{deductible: make(map[int]float64)}
 	rtr := fx.New()
-
 	var trades []broker.Trade
 	for stmt := range statements {
-		l.tax = append(l.tax, plsFromTxs(stmt.Tax, rtr)...)
-		l.profits = append(l.profits, plsFromTxs(stmt.FixedIncome, rtr)...)
+		l.tax = append(l.tax, profitsFromTransactions(stmt.Tax, rtr)...)
+		l.profits = append(l.profits, profitsFromTransactions(stmt.FixedIncome, rtr)...)
 		trades = append(trades, stmt.Trades...)
-
 		for _, fee := range stmt.Fees {
 			if _, ok := l.deductible[fee.Year]; !ok {
 				l.deductible[fee.Year] = 0
@@ -207,7 +206,7 @@ func newLedger(statements <-chan *broker.Statement) *ledger {
 	return l
 }
 
-func plsFromTxs(txs []broker.Tx, r fx.Rater) []pl {
+func profitsFromTransactions(txs []broker.Tx, r fx.Rater) []pl {
 	pls := make([]pl, 0, len(txs))
 
 	for _, tx := range txs {
