@@ -1,6 +1,8 @@
-package fx
+package ibkr
 
-import "testing"
+import (
+	"testing"
+)
 
 func Test_amountFromString(t *testing.T) {
 	tests := []struct {
@@ -13,7 +15,7 @@ func Test_amountFromString(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := amountFromString(tt.in); got != tt.out {
+		if got := AmountFromString(tt.in); got != tt.out {
 			t.Errorf("amountFromString(%q) = %v; want %v", tt.in, got, tt.out)
 		}
 	}
@@ -21,12 +23,12 @@ func Test_amountFromString(t *testing.T) {
 
 func Benchmark_amountFromString(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		amountFromString("-79....97,,,,8.97,8 67")
+		AmountFromString("-79....97,,,,8.97,8 67")
 	}
 }
 
 func Benchmark_amountFromStringOld(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		amountFromStringOld("-79....97,,,,8.97,8 67")
+		AmountFromStringOld("-79....97,,,,8.97,8 67")
 	}
 }

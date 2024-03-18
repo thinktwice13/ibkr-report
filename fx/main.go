@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -47,70 +46,6 @@ func (fx *Exchange) Rate(currency string, year int) float64 {
 // Rater is an interface for the Rate method
 type Rater interface {
 	Rate(currency string, year int) float64
-}
-
-func amountFromStringOld(s string) float64 {
-	if s == "" {
-		return 0
-
-	}
-	// Remove all but numbers, commas and points
-	re := regexp.MustCompile(`[0-9.,-]`)
-	ss := strings.Join(re.FindAllString(s, -1), "")
-	isNeg := ss[0] == '-'
-	// Find all commas and points
-	// If none found, return 0, print error
-	signs := regexp.MustCompile(`[.,]`).FindAllString(ss, -1)
-	if len(signs) == 0 {
-		f, err := strconv.ParseFloat(ss, 64)
-		if err != nil {
-			fmt.Printf("could not convert %s to number", s)
-			return 0
-		}
-
-		return f
-	}
-
-	// Use last sign as decimal separator and ignore others
-	// Find idx and replace whatever sign was to a decimal point
-	sign := signs[len(signs)-1]
-	signIdx := strings.LastIndex(ss, sign)
-	sign = "."
-	left := regexp.MustCompile(`[0-9]`).FindAllString(ss[:signIdx], -1)
-	right := ss[signIdx+1:]
-	n, err := strconv.ParseFloat(strings.Join(append(left, []string{sign, right}...), ""), 64)
-	if err != nil {
-		fmt.Printf("could not convert %s to number", s)
-		return 0
-	}
-	if isNeg {
-		n = n * -1
-	}
-	return n
-}
-
-// amountFromString formats number strings to float64 type
-func amountFromString(s string) float64 {
-	if s == "" {
-		return 0
-	}
-
-	// Only leave the last decimal point and remove all other points, commas and spaces
-	lastDec := strings.LastIndex(s, ".")
-	if lastDec != -1 {
-		s = strings.Replace(s, ".", "", strings.Count(s, ".")-1)
-	}
-
-	s = strings.ReplaceAll(s, ",", "")
-	s = strings.ReplaceAll(s, " ", "")
-
-	// Convert to float
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return f
 }
 
 // url composes the fx exchange rate url for a given currency and year
@@ -186,7 +121,12 @@ func (fx *Exchange) grabRates(year int, currency string) (err error) {
 
 	for _, r := range resp.Rates {
 		storeKey := fmt.Sprintf("%s%d", r.Currency, year)
-		fx.rates[storeKey] = amountFromString(r.Rate)
+		rate, err := parseFloat(r.Rate)
+		if err != nil {
+			log.Println("could not convert rate", r.Rate, "to float")
+		}
+
+		fx.rates[storeKey] = rate
 	}
 
 	return
@@ -197,6 +137,19 @@ type hnbApiResponse struct {
 		Currency string `json:"valuta"`
 		Rate     string `json:"srednji_tecaj"`
 	} `json:"rates"`
+}
+
+func parseFloat(s string) (float64, error) {
+	// Remove dots, replace commas with dot
+	s = strings.ReplaceAll(s, ".", "")
+	s = strings.ReplaceAll(s, ",", ".")
+	// Convert to float
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	return f, nil
 }
 
 func New() *Exchange {
