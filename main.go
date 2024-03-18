@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -337,7 +338,12 @@ func writeFile(data [][]string) (err error) {
 	w := bufio.NewWriter(file)
 	for _, row := range data {
 		for i, cell := range row {
-			if _, err := fmt.Fprintf(w, "%-*s", widths[i]+2, cell); err != nil {
+			// If column is dobit or placeni porez, right-align it
+			if i == 3 || i == 5 {
+				if _, err := fmt.Fprintf(w, "%-*s", widths[i]+2, strings.Repeat(" ", widths[i]-len(cell))+cell); err != nil {
+					return err
+				}
+			} else if _, err := fmt.Fprintf(w, "%-*s", widths[i]+2, cell); err != nil {
 				return err
 			}
 		}
