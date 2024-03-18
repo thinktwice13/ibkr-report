@@ -32,7 +32,7 @@ jobs:
                 run: go test -v ./...
 
             -   name: Run GoReleaser
-                uses: goreleaser/goreleaser-action@v3.0.0
+                uses: goreleaser/goreleaser-action@v5.0.0
                 with:
                     # either 'goreleaser' (default) or 'goreleaser-pro'
                     distribution: goreleaser
