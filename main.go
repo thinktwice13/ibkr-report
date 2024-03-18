@@ -355,8 +355,8 @@ func (r *reader) statement() (*brokerStatement, error) {
 		// All types have a currency
 		currency := row["Currency"]
 
-		section := row["Section"]
-		if section == "Trades" {
+		switch row["Section"] {
+		case "Trades":
 			if row["Date/Time"] == "" || row["Asset Category"] == "Forex" || row["Symbol"] == "" {
 				continue
 			}
@@ -382,42 +382,32 @@ func (r *reader) statement() (*brokerStatement, error) {
 				year:     t.Year(),
 			})
 
-			continue
-		}
-
-		// All other sections only need year as time
-		if row["Date"] == "" {
-			continue
-		}
-
-		if section == "Fees" {
+		case "Fees":
 			bs.fees = append(bs.fees, tx{
 				currency: currency,
 				amount:   amountFromString(row["Amount"]),
 				year:     yearFromDate(row["Date"]),
 			})
 
-			continue
-		}
+		case "Dividends", "Withholding Tax":
+			symbol, err := symbolFromDescription(row["Description"])
+			if err != nil {
+				continue
+			}
 
-		// Dividends and withholding tax have the same structure and need to get a symbol from the description
-		symbol, err := symbolFromDescription(row["Description"])
-		if err != nil {
-			continue
-		}
+			tx := tx{
+				isin:     r.isins[symbol].isin,
+				category: r.isins[symbol].category,
+				currency: currency,
+				amount:   amountFromString(row["Amount"]),
+				year:     yearFromDate(row["Date"]),
+			}
 
-		tx := tx{
-			isin:     r.isins[symbol].isin,
-			category: r.isins[symbol].category,
-			currency: currency,
-			amount:   amountFromString(row["Amount"]),
-			year:     yearFromDate(row["Date"]),
-		}
-
-		if section == "Dividends" {
-			bs.fixedIncome = append(bs.fixedIncome, tx)
-		} else {
-			bs.tax = append(bs.tax, tx)
+			if row["Section"] == "Dividends" {
+				bs.fixedIncome = append(bs.fixedIncome, tx)
+			} else {
+				bs.tax = append(bs.tax, tx)
+			}
 		}
 	}
 
@@ -683,6 +673,7 @@ func writeFile(data [][]string) (err error) {
 	return
 }
 
+// colWidths calculates the maximum width of each column, given a 2D string slice
 func colWidths(data [][]string) []int {
 	widths := make([]int, len(data[0]))
 	for _, row := range data {
