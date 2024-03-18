@@ -1,9 +1,10 @@
 name: release
 
+# Trigger on tags pushed to the repository
 on:
     push:
         tags:
-            - 'v*'
+            - 'v*' # Push events to matching v*, i.e. v1.0.0, v20.15.10
 
 permissions:
     contents: write
