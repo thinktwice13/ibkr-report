@@ -22,28 +22,29 @@ type Exchange struct {
 	rates map[string]float64
 }
 
+// Rate returns the exchange rate for a given currency and year
 func (fx *Exchange) Rate(currency string, year int) float64 {
+	// Determine base currency for the year
 	baseCurrency := "EUR"
 	if year < 2023 {
 		baseCurrency = "HRK"
 	}
-
 	if currency == baseCurrency {
 		return 1.0
 	}
 
+	// Return appropriate rate. Fetch from HNB api if needed
 	key := fmt.Sprintf("%s%d", currency, year)
-
 	if rate, ok := fx.rates[key]; ok {
 		return rate
 	}
-
 	if err := fx.grabRates(year, currency); err != nil {
 		log.Fatal(err)
 	}
 	return fx.rates[key]
 }
 
+// Rater is an interface for the Rate method
 type Rater interface {
 	Rate(currency string, year int) float64
 }
@@ -94,6 +95,7 @@ func amountFromString(s string) float64 {
 		return 0
 	}
 
+	// Only leave the last decimal point and remove all other points, commas and spaces
 	lastDec := strings.LastIndex(s, ".")
 	if lastDec != -1 {
 		s = strings.Replace(s, ".", "", strings.Count(s, ".")-1)
@@ -174,7 +176,7 @@ func (fx *Exchange) grabRates(year int, currency string) (err error) {
 	}()
 	contents, err := io.ReadAll(response.Body)
 	if err != nil {
-		return errors.New("error reading HNB api response")
+		return errors.New("error reading API response")
 	}
 
 	err = json.Unmarshal(contents, &resp.Rates)
