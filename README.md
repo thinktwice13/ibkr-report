@@ -17,14 +17,14 @@ The app does NOT calculate tax payments due to different surtax rates by locatio
 - **Izvor prihoda** is the source of income reported only for `INO-DOH` reports
 - **Plaćeni porez** is the tax paid in the given currency at the source listed in the INO-DOH report
 ```
-Godina  Valuta  Izvješće    Dobit      Izvor prihoda  Plaćeni porez   
-2021    HRK     JOPPD        10000.99                                 
-2021    HRK     INO-DOH       5000.00  US                   1500.00          
-2022    HRK     JOPPD            0.00                                   
-2022    HRK     INO-DOH         500.00  US                   150.00
-2022    HRK     INO-DOH       10000.00  AT                  1500.00
-2023    EUR     JOPPD          1000.00                                   
-2023    EUR     INO-DOH        1000.00  US                   300.00           
+Godina  Valuta  Izvješće  Dobit     Izvor prihoda  Plaćeni porez   
+2021    HRK     JOPPD     10000.99                                 
+2021    HRK     INO-DOH    5000.00  US                   1500.00          
+2022    HRK     JOPPD         0.00                                   
+2022    HRK     INO-DOH     500.00  US                    150.00
+2022    HRK     INO-DOH   10000.00  AT                   1500.00
+2023    EUR     JOPPD      1000.00                                   
+2023    EUR     INO-DOH    1000.00  US                    300.00           
 ```
 
 #### Privacy
