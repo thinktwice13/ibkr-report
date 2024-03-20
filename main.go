@@ -31,7 +31,7 @@ func main() {
 	}
 }
 
-// foreign is a representation of capital gains and Tax paid from foreign source in a single Year
+// foreign is a representation of capital gains and Tax paid at foreign source in a single Year
 type foreign struct {
 	// gains is the total foreign income received
 	gains float64
@@ -106,7 +106,7 @@ func readFiles(files <-chan string) <-chan *broker.Statement {
 			for file := range files {
 				// read file
 				// transform data into a file report
-				// TODO Factory of broker.Reader to include other brokers
+				// TODO Factory of broker.Reader to include other brokers. Problem: Files are broker-specific and need to be sorted before processing
 				bs, err := ibkr.Read(file)
 				if err != nil {
 					fmt.Println("Error reading file:", err)
@@ -138,7 +138,7 @@ func fifo(ts []broker.Trade, r fx.Rater) []pl {
 				break
 			}
 
-			// Find next purchase. Must have some Quantity left to sell
+			// Find matching purchase. Must be before the sale and have some quantity left
 			for purchase < sale && ts[purchase].Quantity <= 0 {
 				purchase++
 			}
@@ -147,7 +147,7 @@ func fifo(ts []broker.Trade, r fx.Rater) []pl {
 				break
 			}
 
-			if pl, taxable := profitsFromTrades(&ts[purchase], &ts[sale], r); taxable {
+			if pl, taxable := profitFromTrades(&ts[purchase], &ts[sale], r); taxable {
 				pls = append(pls, pl)
 			}
 		}
@@ -156,7 +156,7 @@ func fifo(ts []broker.Trade, r fx.Rater) []pl {
 	return pls
 }
 
-// tradesByISIN groups Trades by ISIN, for FIFO strategy to be run separately for each instrument
+// tradesByISIN maps trades by ISIN
 func tradesByISIN(ts []broker.Trade) map[string][]broker.Trade {
 	sort.Slice(ts, func(i, j int) bool {
 		return ts[i].Time.Before(ts[j].Time)
@@ -168,20 +168,17 @@ func tradesByISIN(ts []broker.Trade) map[string][]broker.Trade {
 	return grouped
 }
 
-// profitsFromTrades, returns the pl from a single purchase and sale Trade, as well as a bool indicating if the Trade was taxable
-func profitsFromTrades(purchase, sale *broker.Trade, r fx.Rater) (pl, bool) {
+// profitFromTrades, returns the pl from a single purchase and sale Trade, as well as a bool indicating if the Trade was taxable
+func profitFromTrades(purchase, sale *broker.Trade, r fx.Rater) (pl, bool) {
 	qtyToSell := math.Min(math.Abs(sale.Quantity), math.Abs(purchase.Quantity))
 	purchase.Quantity -= qtyToSell
 	sale.Quantity += qtyToSell
 
-	// Convert both currencies using the exchange rate of the year of the sale
-	pl := pl{
+	return pl{
 		amount: qtyToSell * (sale.Price*r.Rate(sale.Currency, sale.Time.Year()) - purchase.Price*r.Rate(purchase.Currency, sale.Time.Year())),
 		year:   sale.Time.Year(),
 		source: purchase.ISIN[:2],
-	}
-
-	return pl, sale.Time.Before(purchase.Time.AddDate(2, 0, 0))
+	}, sale.Time.Before(purchase.Time.AddDate(2, 0, 0))
 }
 
 func newLedger(statements <-chan *broker.Statement) *ledger {
@@ -336,23 +333,28 @@ func writeFile(data [][]string) (err error) {
 	}()
 
 	w := bufio.NewWriter(file)
+	defer func() {
+		if fErr := w.Flush(); fErr != nil {
+			err = errors.Join(err, fErr)
+		}
+	}()
 	for _, row := range data {
 		for i, cell := range row {
-			// If column is dobit or placeni porez, right-align it
+			// Right-align 'Dobit' and 'Plaćeni porez' columns
 			if i == 3 || i == 5 {
-				if _, err := fmt.Fprintf(w, "%-*s", widths[i]+2, strings.Repeat(" ", widths[i]-len(cell))+cell); err != nil {
-					return err
-				}
-			} else if _, err := fmt.Fprintf(w, "%-*s", widths[i]+2, cell); err != nil {
-				return err
+				cell = strings.Repeat(" ", widths[i]-len(cell)) + cell
+			}
+			_, err = fmt.Fprintf(w, "%-*s", widths[i]+2, cell)
+			if err != nil {
+				return
 			}
 		}
-		if err = w.WriteByte('\n'); err != nil {
+		err = w.WriteByte('\n')
+		if err != nil {
 			return
 		}
 	}
 
-	err = w.Flush()
 	return
 }
 

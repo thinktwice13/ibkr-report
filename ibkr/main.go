@@ -27,7 +27,7 @@ type reader struct {
 	isins  map[string]instrument
 }
 
-func (r *reader) read(row []string) {
+func (r *reader) readRow(row []string) {
 	sections := []string{"Financial Instrument Information", "Trades", "Dividends", "Withholding Tax", "Fees"}
 	// Ignore if not a section we're interested in
 	if !slices.Contains(sections, row[0]) {
@@ -88,19 +88,19 @@ func Read(filename string) (stmt *broker.Statement, err error) {
 			break
 		}
 		if err != nil {
+			log.Printf("could not read csv row: %v", err)
 			continue
 		}
 
-		rdr.read(row)
+		rdr.readRow(row)
 	}
 
 	return rdr.statement(filename)
 }
 
 func (r *reader) statement(filename string) (*broker.Statement, error) {
-	bs := &broker.Statement{Filename: filename, Broker: "IBKR"}
+	stmt := &broker.Statement{Filename: filename, Broker: "IBKR"}
 	for _, row := range r.rows {
-		// All types have a Currency
 		currency := row["Currency"]
 
 		section := row["Section"]
@@ -114,7 +114,7 @@ func (r *reader) statement(filename string) (*broker.Statement, error) {
 				continue
 			}
 
-			bs.Trades = append(bs.Trades, broker.Trade{
+			stmt.Trades = append(stmt.Trades, broker.Trade{
 				ISIN:     r.isins[row["Symbol"]].isin,
 				Category: r.isins[row["Symbol"]].category,
 				Time:     *t,
@@ -123,7 +123,7 @@ func (r *reader) statement(filename string) (*broker.Statement, error) {
 				Price:    amountFromString(row["T. Price"]),
 			})
 
-			bs.Fees = append(bs.Fees, broker.Tx{
+			stmt.Fees = append(stmt.Fees, broker.Tx{
 				Category: r.isins[row["Symbol"]].category,
 				Currency: currency,
 				Amount:   amountFromString(row["Comm/Fee"]),
@@ -139,7 +139,7 @@ func (r *reader) statement(filename string) (*broker.Statement, error) {
 		}
 
 		if section == "Fees" {
-			bs.Fees = append(bs.Fees, broker.Tx{
+			stmt.Fees = append(stmt.Fees, broker.Tx{
 				Currency: currency,
 				Amount:   amountFromString(row["Amount"]),
 				Year:     yearFromDate(row["Date"]),
@@ -163,17 +163,16 @@ func (r *reader) statement(filename string) (*broker.Statement, error) {
 		}
 
 		if section == "Dividends" {
-			bs.FixedIncome = append(bs.FixedIncome, tx)
+			stmt.FixedIncome = append(stmt.FixedIncome, tx)
 		} else {
-			bs.Tax = append(bs.Tax, tx)
+			stmt.Tax = append(stmt.Tax, tx)
 		}
 	}
 
-	return bs, nil
+	return stmt, nil
 }
 
 // symbolFromDescription extracts a symbol from IBKR csv dividend lines
-// TODO Check for ISINs
 func symbolFromDescription(d string) (string, error) {
 	if d == "" {
 		return "", errors.New("empty input")
@@ -202,47 +201,6 @@ func yearFromDate(s string) int {
 		return 0
 	}
 	return y
-}
-
-// amountFromString formats number strings to float64 type
-func amountFromString(s string) float64 {
-	if s == "" {
-		return 0
-
-	}
-	// Remove all but numbers, commas and points
-	re := regexp.MustCompile(`[0-9.,-]`)
-	ss := strings.Join(re.FindAllString(s, -1), "")
-	isNeg := ss[0] == '-'
-	// Find all commas and points
-	// If none found, return 0, print error
-	signs := regexp.MustCompile(`[.,]`).FindAllString(ss, -1)
-	if len(signs) == 0 {
-		f, err := strconv.ParseFloat(ss, 64)
-		if err != nil {
-			fmt.Printf("could not convert %s to number", s)
-			return 0
-		}
-
-		return f
-	}
-
-	// Use last sign as decimal separator and ignore others
-	// Find idx and replace whatever sign was to a decimal point
-	sign := signs[len(signs)-1]
-	signIdx := strings.LastIndex(ss, sign)
-	sign = "."
-	left := regexp.MustCompile(`[0-9]`).FindAllString(ss[:signIdx], -1)
-	right := ss[signIdx+1:]
-	n, err := strconv.ParseFloat(strings.Join(append(left, []string{sign, right}...), ""), 64)
-	if err != nil {
-		fmt.Printf("could not convert %s to number", s)
-		return 0
-	}
-	if isNeg {
-		n = n * -1
-	}
-	return n
 }
 
 // timeFromExact extracts time.Time from IBKR csv Time field
@@ -310,7 +268,7 @@ func importCategory(c string) string {
 	return c
 }
 
-func AmountFromStringOld(s string) float64 {
+func amountFromStringOld(s string) float64 {
 	if s == "" {
 		return 0
 
@@ -350,19 +308,17 @@ func AmountFromStringOld(s string) float64 {
 	return n
 }
 
-func AmountFromString(s string) float64 {
+func amountFromString(s string) float64 {
 	if s == "" {
 		return 0
 	}
 
-	// Only leave the last decimal point and remove all other points, commas and spaces
-	lastDec := strings.LastIndex(s, ".")
-	if lastDec != -1 {
-		s = strings.Replace(s, ".", "", strings.Count(s, ".")-1)
-	}
-
+	// Remove commas, spaces and all but the last decimal point
 	s = strings.ReplaceAll(s, ",", "")
 	s = strings.ReplaceAll(s, " ", "")
+	if strings.LastIndex(s, ".") != -1 {
+		s = strings.Replace(s, ".", "", strings.Count(s, ".")-1)
+	}
 
 	// Convert to float
 	f, err := strconv.ParseFloat(s, 64)

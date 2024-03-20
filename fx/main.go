@@ -23,7 +23,7 @@ type Exchange struct {
 
 // Rate returns the exchange rate for a given currency and year
 func (fx *Exchange) Rate(currency string, year int) float64 {
-	// Determine base currency for the year
+	// Determine base currency for the year. Currency changed in 2023
 	baseCurrency := "EUR"
 	if year < 2023 {
 		baseCurrency = "HRK"
@@ -125,10 +125,8 @@ func (fx *Exchange) grabRates(year int, currency string) (err error) {
 		if err != nil {
 			log.Println("could not convert rate", r.Rate, "to float")
 		}
-
 		fx.rates[storeKey] = rate
 	}
-
 	return
 }
 
@@ -152,6 +150,7 @@ func parseFloat(s string) (float64, error) {
 	return f, nil
 }
 
+// New returns a new currency exchange rate provider, implementing the Rater interface
 func New() *Exchange {
 	return &Exchange{grabRetries: 3, rates: make(map[string]float64)}
 }
