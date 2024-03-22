@@ -7,6 +7,7 @@ import (
 	"ibkr-report/broker"
 	"ibkr-report/fx"
 	"ibkr-report/ibkr"
+	"ibkr-report/revolut"
 	"log"
 	"math"
 	"os"
@@ -25,7 +26,12 @@ func main() {
 		fmt.Println("Finished in", time.Since(t))
 	}()
 
-	r := newReport(newLedger(readFiles(findFiles())))
+	rdr := broker.NewReader()
+	if err := rdr.Register(".csv", ibkr.Read, revolut.Read); err != nil {
+		log.Fatalf("Error registering IBKR reader: %v\n", err)
+	}
+
+	r := newReport(newLedger(readFiles(rdr, findFiles())))
 	if err := writeFile(r.toRows()); err != nil {
 		log.Fatalf("Error writing report: %v\n", err)
 	}
@@ -69,31 +75,33 @@ type ledger struct {
 }
 
 // findFiles looks for .csv files in the current directory tree, while avoiding duplicates
-func findFiles() <-chan string {
+func findFiles() []string {
 	files := make(map[string]struct{})
-	ch := make(chan string, 10)
-	go func() {
-		defer close(ch)
-		err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
-			if filepath.Ext(path) != ".csv" {
-				return nil
-			}
-			if _, ok := files[path]; !ok {
-				files[path] = struct{}{}
-				ch <- path
-			}
-			return nil
-		})
-		if err != nil {
-			fmt.Println("Error finding files:", err)
+	err := filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
+		// Only consider csv and xlsx files
+		fmt.Println("Checking", path)
+		if filepath.Ext(path) == ".csv" || filepath.Ext(path) == ".xlsx" {
+			fmt.Println("Found", path)
+			files[path] = struct{}{}
 		}
-	}()
 
-	return ch
+		return nil
+	})
+	if err != nil {
+		fmt.Println("Error finding files:", err)
+	}
+
+	// list
+	list := make([]string, 0, len(files))
+	for file := range files {
+		list = append(list, file)
+	}
+
+	return list
 }
 
 // readFiles creates a Statement for each provided file
-func readFiles(files <-chan string) <-chan *broker.Statement {
+func readFiles(rdr *broker.Reader, files []string) <-chan *broker.Statement {
 	out := make(chan *broker.Statement, len(files))
 
 	wg := &sync.WaitGroup{}
@@ -101,20 +109,21 @@ func readFiles(files <-chan string) <-chan *broker.Statement {
 	wg.Add(workers)
 	// worker pool
 	for i := 0; i < workers; i++ {
-		go func() {
+		go func(worker int) {
 			defer wg.Done()
-			for file := range files {
-				// read file
-				// transform data into a file report
-				// TODO Factory of broker.Reader to include other brokers. Problem: Files are broker-specific and need to be sorted before processing
-				bs, err := ibkr.Read(file)
+			for ii, file := range files {
+				if ii%workers != worker {
+					continue
+				}
+
+				bs, err := rdr.Read(file)
 				if err != nil {
 					fmt.Println("Error reading file:", err)
 					continue
 				}
 				out <- bs
 			}
-		}()
+		}(i)
 	}
 
 	go func() {

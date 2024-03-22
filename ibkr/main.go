@@ -40,8 +40,7 @@ func (r *reader) readRow(row []string) {
 		return
 	}
 
-	// If this is financial ISIN information, add symbols to isins map
-	// otherwise, map the line and store for later
+	// If this is financial instrument information, add symbols to isins map, otherwise store the line for later processing
 	if row[0] == "Financial Instrument Information" {
 		lm, err := mapIbkrLine(row, r.header)
 		if err != nil {
@@ -80,6 +79,13 @@ func Read(filename string) (stmt *broker.Statement, err error) {
 	csvRdr.FieldsPerRecord = -1
 	// Allow quote in unquoted field
 	csvRdr.LazyQuotes = true
+
+	// Confirm this is IBKR statement. Must have "Interactive Brokers" in second row, 4th column
+	_, _ = csvRdr.Read()
+	row, _ := csvRdr.Read()
+	if len(row) < 4 || !strings.HasPrefix(row[3], "Interactive Brokers") {
+		return nil, broker.ErrNotRecognized
+	}
 
 	rdr := reader{isins: make(map[string]instrument)}
 	for {
